@@ -16,6 +16,10 @@ import io.ktor.server.routing.routing
 /**
  * 进程内迷你 WebDAV 服务（仅测试用）：支持 MKCOL / GET / PUT，带简单 ETag 乐观锁，
  * 覆盖同步引擎所需的最小协议面。
+ *
+ * 刻意贴合真实服务器的两处行为（实测 Teracloud/Apache）：
+ * 1. 集合已存在且 URL 缺少结尾斜杠时，MKCOL 返回 301 而非 405；
+ * 2. GET 返回弱 ETag（`W/"..."`），而 If-Match 只做强比较，带 `W/` 的值一律 412。
  */
 class FakeWebDavServer {
 
@@ -56,11 +60,19 @@ class FakeWebDavServer {
     fun fileContent(path: String): String? = files[path]?.content
 
     private suspend fun RoutingContext.handleRequest() {
-        val path = call.request.path().trim('/')
+        val rawPath = call.request.path()
+        val path = rawPath.trim('/')
         when (call.request.httpMethod.value.uppercase()) {
             "MKCOL" -> {
                 if (createdDirs.contains(path) || files.containsKey(path)) {
-                    call.respondText("", status = HttpStatusCode.MethodNotAllowed)
+                    // 真实服务器（Apache mod_dir）在集合已存在、URL 缺少结尾斜杠时返回 301，
+                    // 带斜杠才返回 405；客户端两种都要按「目录已就绪」处理
+                    if (rawPath.endsWith("/")) {
+                        call.respondText("", status = HttpStatusCode.MethodNotAllowed)
+                    } else {
+                        call.response.header("Location", "$rawPath/")
+                        call.respondText("", status = HttpStatusCode.MovedPermanently)
+                    }
                 } else {
                     createdDirs += path
                     call.respondText("", status = HttpStatusCode.Created)
@@ -83,7 +95,8 @@ class FakeWebDavServer {
                 val ifNoneMatch = call.request.headers["If-None-Match"]
                 val existing = files[path]
                 when {
-                    ifMatch != null && (existing == null || existing.etag != ifMatch) ->
+                    // 弱校验值参与 If-Match 时永远不匹配（RFC 7232 §3.1 强比较）
+                    ifMatch != null && (existing == null || strongForm(existing.etag) != ifMatch) ->
                         call.respondText("", status = HttpStatusCode.PreconditionFailed)
 
                     ifNoneMatch == "*" && existing != null ->
@@ -91,7 +104,7 @@ class FakeWebDavServer {
 
                     else -> {
                         etagCounter += 1
-                        val entry = Entry(body, "\"etag-$etagCounter\"")
+                        val entry = Entry(body, "W/\"etag-$etagCounter\"")
                         files[path] = entry
                         call.response.header("ETag", entry.etag)
                         call.respondText("", status = HttpStatusCode.Created)
@@ -102,4 +115,6 @@ class FakeWebDavServer {
             else -> call.respondText("", status = HttpStatusCode.MethodNotAllowed)
         }
     }
+
+    private fun strongForm(etag: String): String = etag.removePrefix("W/")
 }

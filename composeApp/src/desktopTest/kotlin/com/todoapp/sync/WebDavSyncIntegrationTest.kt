@@ -180,6 +180,25 @@ class WebDavSyncIntegrationTest {
     }
 
     @Test
+    fun `目录已存在时重复同步不报错`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "任务")
+        testTime += 100
+
+        // 第一次同步创建目录，之后每次 MKCOL 都命中「已存在」分支：
+        // 服务器对缺少结尾斜杠的 URL 返回 301，客户端必须仍然成功
+        repeat(3) { round ->
+            repoA.addItem(list.id, "第 $round 条")
+            testTime += 100
+            sync(engineA)
+        }
+        assertEquals(1, repoA.lists.value.count { it.deletedAt == null }, "清单数量应保持不变")
+        assertEquals(4, repoA.items.value.count { it.deletedAt == null }, "三条新增加一条初始，共四条")
+        assertTrue(server.fileExists("dav/ToDoApp/todoapp.json"))
+    }
+
+    @Test
     fun `ETag 冲突触发重试并最终成功`() = runBlocking {
         val (repoA, engineA, _) = newDevice("A")
         val (repoB, engineB, _) = newDevice("B")
