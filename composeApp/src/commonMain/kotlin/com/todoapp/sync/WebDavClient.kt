@@ -73,7 +73,7 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
             if (isNew) {
                 header(HttpHeaders.IfNoneMatch, "*")
             } else {
-                etag?.let { header(HttpHeaders.IfMatch, it) }
+                strongEtag(etag)?.let { header(HttpHeaders.IfMatch, it) }
             }
             contentType(ContentType.Application.Json)
             setBody(content)
@@ -86,7 +86,7 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
                 ensureRemoteDir()
                 val retry: HttpResponse = httpClient.put(fileUrl()) {
                     header(HttpHeaders.Authorization, authHeader())
-                    etag?.let { header(HttpHeaders.IfMatch, it) }
+                    strongEtag(etag)?.let { header(HttpHeaders.IfMatch, it) }
                     contentType(ContentType.Application.Json)
                     setBody(content)
                 }
@@ -100,17 +100,32 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
         }
     }
 
-    /** 逐级 MKCOL 创建远程目录；405（已存在）视为成功。 */
+    /**
+     * 归一化 ETag 供 If-Match 使用：去掉弱校验前缀 `W/`。
+     * [downloadFile] 拿到的值可能带 `W/`（实测 Teracloud/Apache 会间歇性返回 `W/"..."`），
+     * 而 If-Match 按 RFC 7232 §3.1 只做强比较，弱校验值必然被服务器拒为 412，
+     * 会让同步一直误判成「被其它设备修改」。
+     */
+    private fun strongEtag(etag: String?): String? = etag?.trim()?.removePrefix("W/")
+
+    /**
+     * 逐级 MKCOL 创建远程目录。URL 必须带结尾斜杠：集合已存在时，Apache 系服务器
+     * 会对缺少斜杠的 URL 返回 301（mod_dir），而客户端不跟随非 GET 重定向。
+     * 405（已存在）与 3xx（重定向到集合本身）都视作「目录已就绪」。
+     */
     suspend fun ensureRemoteDir() {
         var path = base
         for (seg in dirSegments) {
             path += "/" + encodeSegment(seg)
-            val response: HttpResponse = httpClient.request(path) {
+            val response: HttpResponse = httpClient.request("$path/") {
                 method = HttpMethod("MKCOL")
                 header(HttpHeaders.Authorization, authHeader())
             }
             val status = response.status
-            if (!(status.isSuccess() || status == HttpStatusCode.MethodNotAllowed)) {
+            val dirReady = status.isSuccess() ||
+                status == HttpStatusCode.MethodNotAllowed ||
+                status.value in 300..399
+            if (!dirReady) {
                 throw WebDavException("创建远程目录失败：HTTP ${status.value}", status.value)
             }
         }
