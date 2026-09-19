@@ -1,3 +1,5 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidKmpLibrary)
@@ -71,6 +73,15 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "com.todoapp.MainKt"
+
+        nativeDistributions {
+            // 桌面端安装包：macOS 出 .dmg，Windows 出 .msi，Linux 出 .deb
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            packageName = "TodoApp"
+            packageVersion = "1.0.0"
+            description = "Kotlin Multiplatform todo app with WebDAV sync"
+            vendor = "TodoApp"
+        }
     }
 }
 
