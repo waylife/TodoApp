@@ -32,7 +32,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 29 个测试已在 17.0.7 与 21.0.8 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 31 个测试已在 17.0.7 上验证（此前 29 个用例亦在 21.0.8 通过）；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -109,7 +109,7 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 ## 测试
 
 ```bash
-./gradlew :composeApp:desktopTest         # 全部 29 个用例，跑在 JVM 目标上
+./gradlew :composeApp:desktopTest         # 全部 31 个用例，跑在 JVM 目标上
 ```
 
 | 测试类 | 用例数 | 覆盖内容 |
@@ -117,10 +117,36 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 | `SyncMergeTest` | 8 | 合并算法：新增、并发编辑、删除优先、删除后复活、参数顺序对称性（保证多端收敛） |
 | `PlanGrouperTest` | 8 | 计划页分组：过滤无日期/已完成/已删除项、逾期不重复展示、范围边界、组内排序 |
 | `PlanRangeTest` | 7 | 今日/本周/两周/一个月范围计算，含跨周与跨年推算 |
-| `WebDavSyncIntegrationTest` | 6 | 端到端同步：首次上传、多级目录创建、双向同步、并发冲突收敛、删除传播、ETag 冲突重试 |
+| `WebDavSyncIntegrationTest` | 7 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试 |
+| `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
 
 集成测试会在进程内启动一个**迷你 WebDAV 服务**（支持 MKCOL/GET/PUT 与 ETag），用两台独立
-「设备」（各自内存数据库）跑完整同步闭环，**无需任何外部服务器或账号**。
+「设备」（各自内存数据库）跑完整同步闭环，**无需任何外部服务器或账号**。该迷你服务刻意复刻
+了真实服务器（实测 Apache / Teracloud）的两个坑：集合已存在时 MKCOL 返回 301、GET 返回弱
+ETag `W/"..."`，保证这两处适配不会被改回去。
+
+### 对着真实服务器验收同步
+
+`RealWebDavSmokeTest` 走应用真实的 `WebDavClient` + `SyncEngine`，依次验证「测试连接 → 首次
+上传 → 另一设备拉取 → 双向增量 → 删除传播 → 陈旧 ETag 触发 412 → 弱 ETag 归一化后仍可上传」。
+凭据按顺序从以下位置读取，读不到就整组跳过（因此不会拖垮 CI）：
+
+1. 环境变量 `TODOAPP_DAV_URL` / `TODOAPP_DAV_USER` / `TODOAPP_DAV_PASS` / `TODOAPP_DAV_DIR`
+2. 属性文件 `TODOAPP_DAV_TEST_PROPS` 指向的路径，默认 `/tmp/todoapp-dav-test.properties`
+
+```bash
+cat > /tmp/todoapp-dav-test.properties <<'EOF'
+url=https://dav.example.com/dav/
+user=your-user
+pass=your-password
+dir=ToDoApp
+EOF
+chmod 600 /tmp/todoapp-dav-test.properties
+
+./gradlew :composeApp:desktopTest --tests 'com.todoapp.sync.RealWebDavSmokeTest' -i
+```
+
+用例只在 `{dir}/smoke/e2e/` 子目录下读写，不会碰真实同步目录；凭据文件在仓库之外，不会入库。
 
 ### 界面自动化验证
 
@@ -220,7 +246,7 @@ composeApp/                    共享模块（UI + 数据 + 同步）
 ├── src/desktopMain/           桌面入口与实现（JDBC SQLite / Preferences / CIO）
 ├── src/iosMain/               iOS 入口与实现（NativeSqliteDriver / NSUserDefaults / Darwin）
 ├── src/commonTest/            合并算法、计划分组、时间范围单测
-└── src/desktopTest/           迷你 WebDAV 服务 + 端到端同步集成测试
+└── src/desktopTest/           迷你 WebDAV 服务 + 端到端同步集成测试 + 真实服务器冒烟测试
 
 androidApp/                    Android 应用模块（薄壳）
 iosApp/                        iOS 壳工程（project.yml 由 xcodegen 生成 .xcodeproj）
@@ -270,9 +296,13 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 - **同步为整文件快照替换**，适合个人待办的数据量；条目数极大时（数万条以上）每次同步都会
   传输完整 JSON，届时可改为增量或分片
 - **不支持自签名证书**的 WebDAV 服务器，请使用受信任证书的 HTTPS 地址
+- **ETag 需随文件内容变化**：客户端送 `If-Match` 前会把弱校验值（`W/"..."`）归一化成强形式，
+  但若服务器或反向代理给出与内容无关的 ETag，冲突重试仍会失败（表现为「远程数据已被其它设备
+  修改」）
 - **凭据保存在各平台普通私有存储**（SharedPreferences / NSUserDefaults / Java Preferences），
   未接入 iOS Keychain 与 Android Keystore；安全性依赖设备本身的隔离
-- **不支持经代理访问** WebDAV 服务器
+- 未见有经代理访问的成功验证；目录创建已适配服务器返回 301 重定向的情形，但代理改写 ETag
+  仍可能导致同步冲突
 - 长期（>90 天）离线设备上的旧数据可能导致已删除条目复活
 - 尚无本地通知提醒、标签、优先级、子任务、重复任务等功能
 
