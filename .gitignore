@@ -1,0 +1,17 @@
+*.iml
+.gradle
+/local.properties
+.idea
+.DS_Store
+build
+/captures
+.kotlin
+.externalNativeBuild
+.cxx
+xcuserdata/
+DerivedData/
+# ZCode 会话元数据
+.zcode/
+# xcodegen 生成物：运行 `cd iosApp && xcodegen generate` 重建
+iosApp/iosApp.xcodeproj
+iosApp/iosApp/Info.plist
