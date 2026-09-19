@@ -1,0 +1,46 @@
+CREATE TABLE todoList (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    deletedAt INTEGER
+);
+
+CREATE TABLE todoItem (
+    id TEXT NOT NULL PRIMARY KEY,
+    listId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    done INTEGER NOT NULL DEFAULT 0,
+    dueAt INTEGER,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    deletedAt INTEGER
+);
+
+upsertList:
+INSERT OR REPLACE INTO todoList(id, name, sort, createdAt, updatedAt, deletedAt)
+VALUES (?, ?, ?, ?, ?, ?);
+
+upsertItem:
+INSERT OR REPLACE INTO todoItem(id, listId, title, note, done, dueAt, createdAt, updatedAt, deletedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectAllLists:
+SELECT * FROM todoList;
+
+selectAllItems:
+SELECT * FROM todoItem;
+
+purgeListsDeletedBefore:
+DELETE FROM todoList WHERE deletedAt IS NOT NULL AND deletedAt < ?;
+
+purgeItemsDeletedBefore:
+DELETE FROM todoItem WHERE deletedAt IS NOT NULL AND deletedAt < ?;
+
+deleteAllLists:
+DELETE FROM todoList;
+
+deleteAllItems:
+DELETE FROM todoItem;
