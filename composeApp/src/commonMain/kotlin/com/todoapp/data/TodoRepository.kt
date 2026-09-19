@@ -150,6 +150,18 @@ class TodoRepository(
         reloadFromDb()
     }
 
+    /**
+     * 清空全部本地数据（设置页「删除远端数据」勾选「同时清空本机数据」时调用）。
+     * 刻意不触发 [onLocalChange]：这里的意图是让数据消失，而不是再同步出去。
+     */
+    fun clearAll() {
+        db.transaction {
+            db.todoQueries.deleteAllLists()
+            db.todoQueries.deleteAllItems()
+        }
+        reloadFromDb()
+    }
+
     // ---------- 内部 ----------
 
     private fun persistList(list: TodoList) {

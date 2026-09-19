@@ -22,7 +22,19 @@ data class SettingsUiState(
     val testSuccess: Boolean = false,
     val syncStatus: SyncStatus = SyncStatus.Idle,
     val lastSyncAt: Long = 0,
+    /** 远端快照的完整地址，用于「删除远端数据」确认框里写清楚要删什么。 */
+    val remotePath: String = "",
 )
+
+/**
+ * 拼接远端快照地址（仅用于界面展示，不做 URL 编码）。
+ * 未填服务器地址时返回空串——此时按钮本就不可点，确认框只需给一句通用文案。
+ */
+private fun remotePathOf(config: WebDavConfig): String {
+    val server = config.serverUrl.trim().trimEnd('/')
+    if (server.isEmpty()) return ""
+    return "$server/${config.remoteDir.trim('/')}/${WebDavClient.FILE_NAME}"
+}
 
 class SettingsViewModel(
     private val settingsStore: SettingsStore,
@@ -50,8 +62,10 @@ class SettingsViewModel(
             lastSyncAt = when (status) {
                 is SyncStatus.Success -> status.at
                 is SyncStatus.Error -> status.lastSuccessAt ?: initialLastSyncAt
+                is SyncStatus.RemoteCleared -> if (status.localCleared) 0 else initialLastSyncAt
                 else -> initialLastSyncAt
             },
+            remotePath = remotePathOf(config),
         )
     }.stateIn(appScope, SharingStarted.Eagerly, SettingsUiState())
 
@@ -96,4 +110,12 @@ class SettingsViewModel(
     }
 
     fun syncNow() = syncEngine.syncNow()
+
+    /**
+     * 删除远端数据。[clearLocal] 为真时连同本机数据一起清空。
+     * 界面上必须先经过确认对话框，这里不再重复询问。
+     */
+    fun deleteRemoteData(clearLocal: Boolean) {
+        syncEngine.deleteRemoteData(clearLocal)
+    }
 }

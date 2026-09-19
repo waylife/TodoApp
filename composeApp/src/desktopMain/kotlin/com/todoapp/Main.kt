@@ -21,11 +21,13 @@ fun main(args: Array<String>) {
     // 自动化验证模式：
     //   --render <输出路径> [--tab plan] [--seed]  离屏渲染界面为 PNG（不受窗口遮挡影响）
     //   --selftest <输出路径> [--seed] [--tab plan] 启动窗口后截屏
+    //   --delete-dialog                            设置页直接展开「删除远端数据」确认框
     val renderFlag = args.indexOf("--render")
     val renderPath = if (renderFlag >= 0) args.getOrNull(renderFlag + 1) else null
     val selftestFlag = args.indexOf("--selftest")
     val selftestPath = if (selftestFlag >= 0) args.getOrNull(selftestFlag + 1) else null
     val seedDemo = args.contains("--seed")
+    val deleteDialog = args.contains("--delete-dialog")
     val initialTab = when (args.getOrNull(args.indexOf("--tab") + 1)) {
         "plan" -> "PLAN"
         "settings" -> "SETTINGS"
@@ -41,7 +43,7 @@ fun main(args: Array<String>) {
     if (seedDemo || renderPath != null) seedDemoData(container)
 
     if (renderPath != null) {
-        renderToPng(container, initialTab, renderPath)
+        renderToPng(container, initialTab, renderPath, deleteDialog)
         return
     }
 
@@ -91,11 +93,24 @@ private fun runSelftest(outputPath: String) {
 }
 
 /** 离屏把界面渲染为 PNG，用于自动化验证（不依赖窗口系统与前台焦点）。 */
-private fun renderToPng(container: AppContainer, initialTab: String, outputPath: String) {
+private fun renderToPng(
+    container: AppContainer,
+    initialTab: String,
+    outputPath: String,
+    deleteDialog: Boolean = false,
+) {
     try {
         val content: @androidx.compose.runtime.Composable () -> Unit = when (initialTab) {
             "SETTINGS" -> {
-                { com.todoapp.ui.theme.TodoTheme { com.todoapp.ui.settings.SettingsScreen(container.settingsViewModel) {} } }
+                {
+                    com.todoapp.ui.theme.TodoTheme {
+                        com.todoapp.ui.settings.SettingsScreen(
+                            container.settingsViewModel,
+                            onBack = {},
+                            autoOpenDeleteDialog = deleteDialog,
+                        )
+                    }
+                }
             }
             else -> {
                 { com.todoapp.ui.App(container, initialTab) }

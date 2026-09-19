@@ -13,12 +13,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.prefs.Preferences
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -216,5 +219,112 @@ class WebDavSyncIntegrationTest {
         sync(engineA)
 
         assertEquals(2, repoA.lists.value.filter { it.deletedAt == null }.size, "A 应合并进 B 新增的清单")
+    }
+
+    /** 删除远端任务，[clearLocal] 对应设置页确认框里的勾选项。 */
+    private suspend fun deleteRemote(engine: SyncEngine, clearLocal: Boolean) {
+        val job = engine.deleteRemoteData(clearLocal)
+        assertNotNull(job, "已配置 WebDAV，删除任务不应为 null")
+        withTimeout(15_000) { job.join() }
+    }
+
+    @Test
+    fun `删除远端数据保留本机数据`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "写周报")
+        testTime += 100
+        sync(engineA)
+        assertTrue(server.fileExists(PATH))
+
+        deleteRemote(engineA, clearLocal = false)
+
+        assertFalse(server.fileExists(PATH), "远端快照应被删除")
+        assertEquals(1, repoA.lists.value.size, "未勾选清空本机时，本机数据应保留")
+        assertEquals("写周报", repoA.items.value.first().title)
+        assertTrue(engineA.status.value is SyncStatus.RemoteCleared, "状态应为已清空远端，实际：${engineA.status.value}")
+    }
+
+    @Test
+    fun `删除远端数据并清空本机后不会把数据传回`() = runBlocking {
+        val (repoA, engineA, settingsA) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "写周报")
+        testTime += 100
+        sync(engineA)
+
+        deleteRemote(engineA, clearLocal = true)
+
+        assertFalse(server.fileExists(PATH))
+        assertTrue(repoA.lists.value.isEmpty(), "本机清单应被清空")
+        assertTrue(repoA.items.value.isEmpty(), "本机待办应被清空")
+        assertEquals(0L, settingsA.lastSyncAt, "清空后不应再显示上次同步时间")
+
+        // 关键：清空后再同步，远端不会复活旧数据
+        sync(engineA)
+        assertFalse(
+            server.fileContent(PATH)?.contains("写周报") ?: false,
+            "清空本机后同步不应把旧数据传回远端",
+        )
+    }
+
+    @Test
+    fun `远端数据从未存在时删除也不报错`() = runBlocking {
+        val (_, engineA, _) = newDevice("A")
+
+        deleteRemote(engineA, clearLocal = false)
+
+        assertTrue(
+            engineA.status.value is SyncStatus.RemoteCleared,
+            "远端本就没有快照（404）时应视作删除成功，实际：${engineA.status.value}",
+        )
+    }
+
+    @Test
+    fun `删除远端后待触发的自动同步不会把数据传回`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "写周报")
+        testTime += 100
+        sync(engineA)
+        assertTrue(server.fileExists(PATH))
+
+        // 本机再改一次，让防抖任务排队；紧接着删除远端，排队中的上传必须被取消
+        repoA.addItem(list.id, "还没同步的事项")
+        testTime += 100
+        engineA.scheduleSync(delayMillis = 100)
+        deleteRemote(engineA, clearLocal = true)
+        delay(600)
+
+        assertFalse(server.fileExists(PATH), "防抖同步不应在删除之后把数据重新传上去")
+    }
+
+    @Test
+    fun `远端删除后其它设备仍可重新上传自己的数据`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val (repoB, engineB, _) = newDevice("B")
+        val listA = repoA.addList("A 的清单")
+        repoA.addItem(listA.id, "A 的事项")
+        testTime += 100
+        sync(engineA)
+        sync(engineB)
+        assertEquals(1, repoB.lists.value.size)
+
+        // A 清空远端（含本机），B 的数据不受影响
+        deleteRemote(engineA, clearLocal = true)
+        assertFalse(server.fileExists(PATH))
+        assertEquals(1, repoB.lists.value.count { it.deletedAt == null }, "B 本机数据不应被牵连")
+
+        // B 的下一次同步把它的数据重新写回远端，这是快照同步的固有行为
+        sync(engineB)
+        assertTrue(server.fileExists(PATH))
+        assertEquals(
+            listOf("A 的清单"),
+            repoB.lists.value.filter { it.deletedAt == null }.map { it.name },
+        )
+    }
+
+    private companion object {
+        const val PATH = "dav/ToDoApp/todoapp.json"
     }
 }

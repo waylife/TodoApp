@@ -14,7 +14,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 
 /**
- * 进程内迷你 WebDAV 服务（仅测试用）：支持 MKCOL / GET / PUT，带简单 ETag 乐观锁，
+ * 进程内迷你 WebDAV 服务（仅测试用）：支持 MKCOL / GET / PUT / DELETE，带简单 ETag 乐观锁，
  * 覆盖同步引擎所需的最小协议面。
  *
  * 刻意贴合真实服务器的两处行为（实测 Teracloud/Apache）：
@@ -110,6 +110,12 @@ class FakeWebDavServer {
                         call.respondText("", status = HttpStatusCode.Created)
                     }
                 }
+            }
+
+            "DELETE" -> {
+                // 文件与集合都支持删除；都不存在时按 RFC 4918 返回 404（客户端视作「已删除」）
+                val removed = files.remove(path) != null || createdDirs.remove(path)
+                call.respondText("", status = if (removed) HttpStatusCode.NoContent else HttpStatusCode.NotFound)
             }
 
             else -> call.respondText("", status = HttpStatusCode.MethodNotAllowed)

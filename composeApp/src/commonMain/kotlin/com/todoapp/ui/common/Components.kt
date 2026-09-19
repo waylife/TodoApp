@@ -40,6 +40,7 @@ fun SyncStatusRow(status: SyncStatus, onSync: () -> Unit, modifier: Modifier = M
         is SyncStatus.Syncing -> MaterialTheme.colorScheme.primary to "同步中…"
         is SyncStatus.NotConfigured -> Color.Gray to "未配置同步"
         is SyncStatus.Success -> Color(0xFF2E7D32) to "已同步"
+        is SyncStatus.RemoteCleared -> Color(0xFFB26A00) to "远端已清空"
         is SyncStatus.Error -> MaterialTheme.colorScheme.error to status.message.take(24)
     }
     Row(

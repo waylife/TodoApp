@@ -29,11 +29,12 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * 对着**真实 WebDAV 服务器**的冒烟测试：走的是应用真实的 [WebDavClient] + [SyncEngine]，
- * 用两台独立本地库验证「上传 → 另一设备拉取 → 双向增量 → 删除传播 → 412 冲突」。
+ * 用两台独立本地库验证「上传 → 另一设备拉取 → 双向增量 → 删除传播 → 412 冲突 → 删除远端数据」。
  *
  * 未提供凭据时整组用例跳过，因此可以安全地留在仓库里作为手动验收手段。
  * 凭据来源（按顺序尝试）：
@@ -238,7 +239,18 @@ class RealWebDavSmokeTest {
         }
         println("[7] 6 轮中服务器返回弱 ETag 的轮数：$weakRounds（弱 ETag 直接用于 If-Match 必然 412）")
 
+        // ---- 8. 删除远端数据（设置页「删除远端数据」）：确认真实服务器删得掉、且回读为空 ----
+        val remoteBefore = remoteContent()
         println("[done] 端到端同步全部通过，远程文件：${fileUrl()}")
-        println("[done] 远程正文预览：${remoteContent()?.take(400)}")
+        println("[done] 远程正文预览：${remoteBefore?.take(400)}")
+
+        val cleaner = WebDavClient(httpClient, WebDavConfig(creds.url, creds.user, creds.pass, testDir))
+        cleaner.deleteFile()
+        assertNull(cleaner.downloadFile().first, "删除后回读应为空（服务器可能返回陈旧内容）")
+        // 幂等：远端已不存在时服务器返回 404，也必须算删除成功
+        cleaner.deleteFile()
+        println("[8] 删除远端数据成功且可重复执行，远端回读为 null")
+
+        println("[done] 冒烟测试已在服务器上删除自己写入的数据：${fileUrl()}")
     }
 }

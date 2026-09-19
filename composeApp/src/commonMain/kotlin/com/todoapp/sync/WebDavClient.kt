@@ -2,6 +2,7 @@ package com.todoapp.sync
 
 import com.todoapp.data.WebDavConfig
 import io.ktor.client.HttpClient
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.put
@@ -25,10 +26,11 @@ open class WebDavException(message: String, val statusCode: Int? = null) : Excep
 class WebDavConflictException : WebDavException("远程数据已被其它设备修改", 412)
 
 /**
- * 极简 WebDAV 客户端，只用到三个能力：
+ * 极简 WebDAV 客户端，只用到四个能力：
  * - MKCOL 建目录（逐级创建，405 视为已存在）
  * - GET 下载快照（404 视为首次同步）
  * - PUT 上传快照（If-Match / If-None-Match 乐观锁）
+ * - DELETE 删除快照（设置页「删除远端数据」，删除后回读确认）
  * 认证使用 Basic（HTTPS 下传输）。MVP 不支持自签名证书。
  */
 class WebDavClient(private val httpClient: HttpClient, private val config: WebDavConfig) {
@@ -142,6 +144,30 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
         Result.failure(WebDavException("无法连接服务器：${e.message ?: "网络错误"}"))
     }
 
+    /**
+     * 删除远程快照。404 也算成功（远端本就没有），因此可以重复执行。
+     * 删除后回读一次：部分服务器（或反向代理）对 DELETE 返回 2xx 却并未真正删除，
+     * 静默失败会让界面谎报「已清空」，此处宁可报错。
+     */
+    suspend fun deleteFile() {
+        val response: HttpResponse = httpClient.delete(fileUrl()) {
+            header(HttpHeaders.Authorization, authHeader())
+        }
+        when {
+            response.status.isSuccess() -> Unit
+            response.status == HttpStatusCode.NotFound -> Unit
+            response.status == HttpStatusCode.Unauthorized ->
+                throw WebDavException("认证失败（401），请检查用户名和密码", 401)
+            response.status == HttpStatusCode.Forbidden ->
+                throw WebDavException("服务器拒绝访问（403），请检查权限", 403)
+            else -> throw WebDavException("服务器返回 HTTP ${response.status.value}", response.status.value)
+        }
+        val (remaining, _) = downloadFile()
+        if (remaining != null) {
+            throw WebDavException("服务器未真正删除该文件（回读仍有内容），请检查该目录的写入权限")
+        }
+    }
+
     private fun encodeSegment(segment: String): String {
         val safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
         val bytes = segment.encodeToByteArray()
@@ -153,7 +179,8 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
         }
     }
 
-    private companion object {
+    companion object {
+        /** 远端快照文件名。设置页展示远端路径时复用，避免两处各写一份。 */
         const val FILE_NAME = "todoapp.json"
     }
 }

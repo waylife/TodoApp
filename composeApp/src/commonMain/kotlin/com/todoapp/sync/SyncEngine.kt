@@ -2,11 +2,13 @@ package com.todoapp.sync
 
 import com.todoapp.data.SettingsStore
 import com.todoapp.data.TodoRepository
+import com.todoapp.data.WebDavConfig
 import com.todoapp.model.RemoteSnapshot
 import com.todoapp.util.Dates
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +26,9 @@ sealed interface SyncStatus {
     data object NotConfigured : SyncStatus
     data class Success(val at: Long) : SyncStatus
     data class Error(val message: String, val lastSuccessAt: Long?) : SyncStatus
+
+    /** 远端快照已被删除（设置页「删除远端数据」）。[localCleared] 表示本机数据是否一并清空。 */
+    data class RemoteCleared(val at: Long, val localCleared: Boolean) : SyncStatus
 }
 
 /**
@@ -48,6 +53,7 @@ class SyncEngine(
 
     private val mutex = Mutex()
     private var debounceJob: Job? = null
+    private var syncJob: Job? = null
 
     init {
         repository.onLocalChange = { scheduleSync() }
@@ -69,7 +75,27 @@ class SyncEngine(
             _status.value = SyncStatus.NotConfigured
             return null
         }
-        return scope.launch { performSync() }
+        return scope.launch { performSync() }.also { syncJob = it }
+    }
+
+    /**
+     * 删除远端快照（设置页「删除远端数据」）；[clearLocal] 为真时同时清空本机数据。
+     * 未配置 WebDAV 时返回 null 并置为 [SyncStatus.NotConfigured]。
+     *
+     * 动手前先取消排队中的防抖同步与正在跑的同步：整文件快照同步没有增量概念，
+     * 删除之后只要还有一次上传，本机数据就会被原样传回去，等于没删。
+     */
+    fun deleteRemoteData(clearLocal: Boolean): Job? {
+        val config = settingsStore.config.value
+        if (!config.isConfigured) {
+            _status.value = SyncStatus.NotConfigured
+            return null
+        }
+        return scope.launch {
+            debounceJob?.cancelAndJoin()
+            syncJob?.cancelAndJoin()
+            mutex.withLock { doDeleteRemoteData(config, clearLocal) }
+        }
     }
 
     private suspend fun performSync() {
@@ -106,6 +132,25 @@ class SyncEngine(
             _status.value = SyncStatus.Error(e.message ?: "同步失败", settingsStore.lastSyncAt.takeIf { it > 0 })
         } catch (e: Exception) {
             _status.value = SyncStatus.Error("同步失败：${e.message ?: e::class.simpleName}", settingsStore.lastSyncAt.takeIf { it > 0 })
+        }
+    }
+
+    /** 删除远端快照；[clearLocal] 为真时连同本机数据一起清空。调用方需已持有 [mutex]。 */
+    private suspend fun doDeleteRemoteData(config: WebDavConfig, clearLocal: Boolean) {
+        _status.value = SyncStatus.Syncing
+        val lastSuccessAt = settingsStore.lastSyncAt.takeIf { it > 0 }
+        try {
+            WebDavClient(httpClient, config).deleteFile()
+            if (clearLocal) {
+                repository.clearAll()
+                settingsStore.lastSyncAt = 0
+            }
+            _status.value = SyncStatus.RemoteCleared(clock(), clearLocal)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val reason = e.message ?: e::class.simpleName ?: "未知错误"
+            _status.value = SyncStatus.Error("删除远端数据失败：$reason", lastSuccessAt)
         }
     }
 
