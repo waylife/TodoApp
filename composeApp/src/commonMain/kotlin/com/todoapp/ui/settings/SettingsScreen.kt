@@ -41,12 +41,14 @@ import com.todoapp.sync.SyncStatus
 import com.todoapp.ui.common.SettingsSectionTitle
 import com.todoapp.util.Dates
 import com.todoapp.viewmodel.SettingsViewModel
+import com.todoapp.viewmodel.TransferViewModel
 
-/** 设置页：WebDAV 服务器配置、测试连接、手动同步、删除远端数据。 */
+/** 设置页：WebDAV 服务器配置、测试连接、手动同步、数据备份、删除远端数据。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    transferViewModel: TransferViewModel,
     onBack: () -> Unit,
     /** 供界面自动化验证：直接展开删除确认框，省去模拟点击。 */
     autoOpenDeleteDialog: Boolean = false,
@@ -169,6 +171,8 @@ fun SettingsScreen(
             ) {
                 Text("立即同步")
             }
+
+            DataTransferSection(viewModel = transferViewModel)
 
             SettingsSectionTitle("危险操作")
             Text(

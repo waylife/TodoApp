@@ -22,12 +22,14 @@ fun main(args: Array<String>) {
     //   --render <输出路径> [--tab plan] [--seed]  离屏渲染界面为 PNG（不受窗口遮挡影响）
     //   --selftest <输出路径> [--seed] [--tab plan] 启动窗口后截屏
     //   --delete-dialog                            设置页直接展开「删除远端数据」确认框
+    //   --import-dialog <备份文件>                  设置页直接展开「导入备份」确认框，用于验证界面
     val renderFlag = args.indexOf("--render")
     val renderPath = if (renderFlag >= 0) args.getOrNull(renderFlag + 1) else null
     val selftestFlag = args.indexOf("--selftest")
     val selftestPath = if (selftestFlag >= 0) args.getOrNull(selftestFlag + 1) else null
     val seedDemo = args.contains("--seed")
     val deleteDialog = args.contains("--delete-dialog")
+    val importDialogPath = args.valueOfFlag("--import-dialog")
     val initialTab = when (args.getOrNull(args.indexOf("--tab") + 1)) {
         "plan" -> "PLAN"
         "settings" -> "SETTINGS"
@@ -41,6 +43,16 @@ fun main(args: Array<String>) {
         "today" -> container.planViewModel.setRange(com.todoapp.util.PlanRange.TODAY)
     }
     if (seedDemo || renderPath != null) seedDemoData(container)
+
+    // 把备份文件喂给导入流程，让确认框直接展开（--render 时用于验证界面）
+    if (importDialogPath != null) {
+        val backup = File(importDialogPath)
+        if (backup.exists()) {
+            container.transferViewModel.previewBackup(backup.name, backup.readText())
+        } else {
+            println("IMPORT_DIALOG_SKIPPED: 找不到文件 $importDialogPath")
+        }
+    }
 
     if (renderPath != null) {
         renderToPng(container, initialTab, renderPath, deleteDialog)
@@ -68,6 +80,16 @@ fun main(args: Array<String>) {
             }
         }
     }
+}
+
+/**
+ * 取 `--flag value` 形式参数的值。flag 不存在时返回 null。
+ * 不能写成 `args.getOrNull(args.indexOf(flag) + 1)`：flag 缺失时 indexOf 返回 -1，
+ * 加一之后会取到 args[0]，等于凭空读到了第一个参数。
+ */
+private fun Array<String>.valueOfFlag(flag: String): String? {
+    val index = indexOf(flag)
+    return if (index >= 0) getOrNull(index + 1) else null
 }
 
 private fun runSelftest(outputPath: String) {
@@ -106,6 +128,7 @@ private fun renderToPng(
                     com.todoapp.ui.theme.TodoTheme {
                         com.todoapp.ui.settings.SettingsScreen(
                             container.settingsViewModel,
+                            container.transferViewModel,
                             onBack = {},
                             autoOpenDeleteDialog = deleteDialog,
                         )

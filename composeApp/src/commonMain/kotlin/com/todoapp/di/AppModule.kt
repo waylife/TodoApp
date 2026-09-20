@@ -8,6 +8,7 @@ import com.todoapp.viewmodel.EditSession
 import com.todoapp.viewmodel.PlanViewModel
 import com.todoapp.viewmodel.SettingsViewModel
 import com.todoapp.viewmodel.TodosViewModel
+import com.todoapp.viewmodel.TransferViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,6 +39,7 @@ val appModule = module {
     single { TodosViewModel(get(), get()) }
     single { PlanViewModel(get(), get()) }
     single { SettingsViewModel(get(), get(), get(), get()) }
+    single { TransferViewModel(get(), get(), get()) }
     single {
         AppContainer(
             repository = get(),
@@ -46,6 +48,7 @@ val appModule = module {
             todosViewModel = get(),
             planViewModel = get(),
             settingsViewModel = get(),
+            transferViewModel = get(),
         )
     }
 }
@@ -58,4 +61,5 @@ class AppContainer(
     val todosViewModel: TodosViewModel,
     val planViewModel: PlanViewModel,
     val settingsViewModel: SettingsViewModel,
+    val transferViewModel: TransferViewModel,
 )

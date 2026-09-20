@@ -24,6 +24,7 @@
 - **搜索**：按标题与备注过滤
 - **深色模式**：跟随系统
 - **WebDAV 同步**：修改后自动同步（防抖 2 秒）+ 手动同步 + 启动同步，支持自定义远程目录
+- **数据导入导出**：导出为 JSON 备份文件、从备份文件导入（合并或覆盖），三端均走系统文件选择器
 - **响应式布局**：宽屏用侧边导航栏，窄屏用底部导航栏（同一套 Compose 代码）
 
 ---
@@ -32,7 +33,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 31 个测试已在 17.0.7 上验证（此前 29 个用例亦在 21.0.8 通过）；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 82 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -109,7 +110,7 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 ## 测试
 
 ```bash
-./gradlew :composeApp:desktopTest         # 全部 31 个用例，跑在 JVM 目标上
+./gradlew :composeApp:desktopTest         # 全部 82 个用例，跑在 JVM 目标上
 ```
 
 | 测试类 | 用例数 | 覆盖内容 |
@@ -117,7 +118,10 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 | `SyncMergeTest` | 8 | 合并算法：新增、并发编辑、删除优先、删除后复活、参数顺序对称性（保证多端收敛） |
 | `PlanGrouperTest` | 8 | 计划页分组：过滤无日期/已完成/已删除项、逾期不重复展示、范围边界、组内排序 |
 | `PlanRangeTest` | 7 | 今日/本周/两周/一个月范围计算，含跨周与跨年推算 |
-| `WebDavSyncIntegrationTest` | 7 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试 |
+| `WebDavSyncIntegrationTest` | 12 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试 |
+| `TodoTransferTest` | 24 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
+| `DataTransferIntegrationTest` | 10 | 导入导出端到端：真实内存库 + 真实同步引擎，只把文件选择器换成内存实现；覆盖导出内容、取消/失败分支、解析失败不动数据、关闭确认框后不写入、导入后主动同步到远端 |
+| `DesktopDocumentTransferTest` | 12 | 桌面端**真实**读写路径（只把弹对话框换成固定返回值）：写盘/覆盖写/路径不可写、读回、往返后墓碑不丢、SAVE 与 LOAD 模式、建议文件名透传、超大文件在读取前被拦下且边界值放行 |
 | `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
 
 集成测试会在进程内启动一个**迷你 WebDAV 服务**（支持 MKCOL/GET/PUT 与 ETag），用两台独立
@@ -161,6 +165,9 @@ chmod 600 /tmp/todoapp-dav-test.properties
 
 # 设置页
 ./gradlew :composeApp:run --args="--render /tmp/settings.png --tab settings"
+
+# 设置页 + 导入确认框（--import-dialog 直接喂一份备份文件，省去模拟点击原生文件对话框）
+./gradlew :composeApp:run --args="--render /tmp/import.png --tab settings --import-dialog /tmp/backup.json"
 ```
 
 `--range` 取值为 `today`（默认）/ `week` / `2weeks` / `month`。另有 `--selftest <路径>`
@@ -229,6 +236,59 @@ chmod 600 /tmp/todoapp-dav-test.properties
 
 ---
 
+## 数据导入导出
+
+设置页「数据备份」区块：**导出为文件…** / **从文件导入…**。三端都调系统原生文件选择器，
+不需要任何存储权限：
+
+| 平台 | 实现 | 行为 | 验证程度 |
+| --- | --- | --- | --- |
+| Android | SAF（`CreateDocument` / `OpenDocument`） | 用户选目录并命名，或从任意位置选文件 | **已在模拟器上跑通导出与导入全流程** |
+| 桌面 | AWT `FileDialog`（macOS 上是原生 NSSavePanel / NSOpenPanel） | 同上 | 除对话框点击外的全部逻辑有测试覆盖（走真实文件系统） |
+| iOS | `UIDocumentPickerViewController` | 导出到「文件」，导入时系统把文件拷贝进沙盒 | 仅编译与静态框架链接 |
+
+Android 端的验收过程：在模拟器上真实点击「导出为文件…」→ 系统 SAF 选择器弹出且带入建议文件名
+→ 保存到「下载」→ 回读文件内容确认是合法快照；再把一份**含墓碑**的备份推入设备导入
+→ 确认框显示「包含 2 个清单、2 条待办、另含 1 条已删除记录」「预计：新增 3、更新 0、删除 1」
+→ 点导入后清单页确实多出 1 个清单 2 条待办，且备份里那条墓碑把本机对应待办删掉了。
+**预估与实际完全一致。**
+
+### 备份格式
+
+**备份文件就是 WebDAV 上的 `todoapp.json` 本身**，不做任何额外包装（缩进输出便于人工查看）。
+因此：导出的文件可以直接改名成 `todoapp.json` 丢进同步目录，反过来也可以把服务器上的同步
+文件下载回来当备份导入。
+
+因为复用同一份 [RemoteSnapshot]，备份是**无损**的——保留 `id`、时间戳与删除墓碑。
+导入后多端合并的结果与「走一次同步」完全等价，不会因为换机而产生重复条目。
+
+### 导入语义
+
+选好文件后会先弹出确认框，展示备份里有多少清单/待办、含多少条已删除记录，以及按「合并」
+导入会**新增/更新/删除**多少条，再由用户选择：
+
+| 方式 | 行为 |
+| --- | --- |
+| **合并**（默认） | 与本地逐条合并，同 id 按 `updatedAt` 取较新者（同 [SyncMerge]）。本地独有的数据保留 |
+| **覆盖** | 本机数据被备份整体替换，本机独有的条目会消失；备份里的墓碑同样生效 |
+
+几点需要留意：
+
+- **备份里的墓碑会删掉本机对应条目**。这是「忠实还原备份」的必然结果，确认框里会明确提示。
+  只想补充数据、不想删东西时，应确认备份里没有涉及本机条目的删除记录。
+- **合并导入不会丢数据，但也可能「没变化」**。如果备份比本机旧，LWW 会让本机版本胜出，
+  此时确认框里的预估是「新增 0、更新 0、删除 0」。
+- **导入后会自动触发一次同步**（导入写库时绕过了仓库的变更回调，所以必须显式推一次），
+  否则导入的数据只留在本机。若未配置 WebDAV 则只是本地生效。
+- 覆盖导入同样会与其它设备按 LWW 合并，**其它设备独有的数据不会因此丢失**——想彻底清空请用
+  「删除远端数据」并勾选「同时清空本机数据」。
+- **超过 32 MB 的文件会被直接拒绝**。三端的选择器都允许用户选到任意文件（Android 侧为了让
+  那些把 `.json` 报成 `octet-stream` 的文件管理器也能选中，MIME 里带了通配），
+  误选大文件时若直接读进内存会让移动端当场 OOM。因此在**读取之前**先按文件大小拦下，
+  提示「不像待办备份，请确认是否选错文件」。个人待办即使上万条也只有几 MB，正常不会碰到。
+
+---
+
 ## 项目结构
 
 ```
@@ -238,15 +298,16 @@ composeApp/                    共享模块（UI + 数据 + 同步）
 │   ├── data/                  数据仓库与设置存储（SQLDelight 生成的 AppDatabase 在 build/generated/sqldelight）
 │   ├── sync/                  WebDAV 客户端、LWW 合并算法、同步引擎
 │   ├── ui/                    主题、通用组件、清单页、计划页、设置页、编辑面板、导航
+│   ├── transfer/              备份编解码与导入语义（TodoTransfer）、文件选择器接口（DocumentTransfer）
 │   ├── util/                  日期与范围工具、计划页分组、UUID
-│   ├── viewmodel/             TodosViewModel / PlanViewModel / SettingsViewModel / EditSession
+│   ├── viewmodel/             TodosViewModel / PlanViewModel / SettingsViewModel / TransferViewModel / EditSession
 │   └── di/                    Koin 装配（platformModule 为 expect/actual）
 ├── src/commonMain/sqldelight/ SQLDelight 表结构与查询（Todo.sq）
-├── src/androidMain/           Android 平台实现（AndroidSqliteDriver / SharedPreferences / OkHttp）
-├── src/desktopMain/           桌面入口与实现（JDBC SQLite / Preferences / CIO）
-├── src/iosMain/               iOS 入口与实现（NativeSqliteDriver / NSUserDefaults / Darwin）
-├── src/commonTest/            合并算法、计划分组、时间范围单测
-└── src/desktopTest/           迷你 WebDAV 服务 + 端到端同步集成测试 + 真实服务器冒烟测试
+├── src/androidMain/           Android 平台实现（AndroidSqliteDriver / SharedPreferences / OkHttp / SAF）
+├── src/desktopMain/           桌面入口与实现（JDBC SQLite / Preferences / CIO / AWT FileDialog）
+├── src/iosMain/               iOS 入口与实现（NativeSqliteDriver / NSUserDefaults / Darwin / UIDocumentPicker）
+├── src/commonTest/            合并算法、计划分组、时间范围、备份编解码与导入语义单测
+└── src/desktopTest/           迷你 WebDAV 服务 + 端到端同步/导入导出集成测试 + 真实服务器冒烟测试
 
 androidApp/                    Android 应用模块（薄壳）
 iosApp/                        iOS 壳工程（project.yml 由 xcodegen 生成 .xcodeproj）
@@ -304,6 +365,21 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 - 未见有经代理访问的成功验证；目录创建已适配服务器返回 301 重定向的情形，但代理改写 ETag
   仍可能导致同步冲突
 - 长期（>90 天）离线设备上的旧数据可能导致已删除条目复活
+- **导入导出只有 JSON 一种格式**，没有 CSV / Markdown 等人类可读导出；备份文件里的
+  `dueAt`、`updatedAt` 都是毫秒时间戳，人工编辑时需要注意
+- **导入不做跨设备 id 去重**：备份与本地是同一条待办但 id 不同（例如从别处手工拼出来的备份）
+  会被当成两条。备份只能由本应用导出
+- **iOS 端只做了编译与静态框架链接验证**，从未在模拟器上运行；桌面端的「点击保存/打开」也
+  无法脚本驱动（macOS 需要辅助功能权限）。Android 端已在模拟器上跑通完整流程，
+  详见上文「数据导入导出」一节
+- **SAF 返回的 Uri 形态取决于具体 provider**，不要用 `uri.lastPathSegment` 当文件名
+  （实测 Downloads provider 给的是 `document/3` 这种数字 id，界面会显示成「位置：3」）。
+  正确做法是查 `ContentResolver` 的 `OpenableColumns.DISPLAY_NAME`
+- **快照读取不是原子的**：`TodoRepository.currentSnapshot()` 分别读取清单与待办两个
+  StateFlow，而同步写回时这两次赋值之间存在一个极短的窗口。若导出恰好落在窗口内，
+  备份可能出现「待办引用了不在备份里的清单」。窗口在微秒级、实际触发概率极低，
+  且这是同步路径本身也存在的性质（用的是同一个方法）。彻底修法是让仓库把两份数据放进
+  同一个 StateFlow 里原子读写，属于独立改动，本次未做
 - 尚无本地通知提醒、标签、优先级、子任务、重复任务等功能
 
 ---

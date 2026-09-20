@@ -67,6 +67,7 @@ private fun AppNav(container: AppContainer, initialTab: String) {
             BackHandlerCompat { showSettings = false }
             SettingsScreen(
                 viewModel = container.settingsViewModel,
+                transferViewModel = container.transferViewModel,
                 onBack = { showSettings = false },
             )
         } else {
