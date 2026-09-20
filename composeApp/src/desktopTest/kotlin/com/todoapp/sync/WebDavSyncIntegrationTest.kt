@@ -221,6 +221,73 @@ class WebDavSyncIntegrationTest {
         assertEquals(2, repoA.lists.value.filter { it.deletedAt == null }.size, "A 应合并进 B 新增的清单")
     }
 
+    @Test
+    fun `GET 显式声明 identity 以避免服务器返回压缩表示的 ETag`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "写周报")
+        testTime += 100
+
+        sync(engineA)
+
+        assertEquals(
+            "identity",
+            server.lastGetAcceptEncoding,
+            "客户端应显式声明 identity：OkHttp 默认发送 Accept-Encoding: gzip 并透明解压，" +
+                "服务器（Apache mod_deflate）会据此把 ETag 改写成带 -gzip 后缀的压缩表示，" +
+                "该值用于 PUT 的 If-Match 时必然 412",
+        )
+    }
+
+    @Test
+    fun `服务器强制以压缩表示返回 ETag 时仍可上传`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "写周报")
+        testTime += 100
+        sync(engineA)
+
+        // 服务器或反向代理无视 Accept-Encoding，一律以压缩表示返回 ETag
+        server.forceGzipEtag = true
+        repoA.addItem(list.id, "买牛奶")
+        testTime += 100
+        sync(engineA)
+
+        val uploaded = server.fileContent("dav/ToDoApp/todoapp.json")
+        assertNotNull(uploaded, "远程应存在快照文件")
+        assertTrue(uploaded.contains("买牛奶"), "剥离 -gzip 后缀后 If-Match 应匹配成功")
+    }
+
+    @Test
+    fun `回到前台触发同步，但距上次成功过近会被节流`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        repoA.onLocalChange = null // 关掉防抖，避免与节流断言抢跑
+
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "任务")
+        testTime += 100
+        sync(engineA)
+
+        // 距上次成功同步仅 1 秒（小于 20 秒节流窗口）：应被跳过，不产生任何上传
+        repoA.addItem(list.id, "节流期内的改动")
+        testTime += 1_000
+        assertNull(engineA.syncOnForeground(), "距上次成功同步不足 20 秒时应被节流")
+        assertFalse(
+            server.fileContent("dav/ToDoApp/todoapp.json")!!.contains("节流期内的改动"),
+            "被节流时不应发起同步",
+        )
+
+        // 超过节流窗口后放行
+        testTime += 30_000
+        val job = engineA.syncOnForeground()
+        assertNotNull(job, "超过节流窗口后应放行")
+        withTimeout(15_000) { job.join() }
+        assertTrue(
+            server.fileContent("dav/ToDoApp/todoapp.json")!!.contains("节流期内的改动"),
+            "放行后应把本地改动同步出去",
+        )
+    }
+
     /** 删除远端任务，[clearLocal] 对应设置页确认框里的勾选项。 */
     private suspend fun deleteRemote(engine: SyncEngine, clearLocal: Boolean) {
         val job = engine.deleteRemoteData(clearLocal)

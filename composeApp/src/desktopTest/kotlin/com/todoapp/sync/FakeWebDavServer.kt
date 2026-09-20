@@ -17,9 +17,10 @@ import io.ktor.server.routing.routing
  * 进程内迷你 WebDAV 服务（仅测试用）：支持 MKCOL / GET / PUT / DELETE，带简单 ETag 乐观锁，
  * 覆盖同步引擎所需的最小协议面。
  *
- * 刻意贴合真实服务器的两处行为（实测 Teracloud/Apache）：
+ * 刻意贴合真实服务器的三处行为（实测 Teracloud/Apache）：
  * 1. 集合已存在且 URL 缺少结尾斜杠时，MKCOL 返回 301 而非 405；
- * 2. GET 返回弱 ETag（`W/"..."`），而 If-Match 只做强比较，带 `W/` 的值一律 412。
+ * 2. GET 返回弱 ETag（`W/"..."`），而 If-Match 只做强比较，带 `W/` 的值一律 412；
+ * 3. 压缩响应上的 ETag 带 `-gzip` 后缀（由 [forceGzipEtag] 开关模拟，见该属性注释）。
  */
 class FakeWebDavServer {
 
@@ -28,6 +29,17 @@ class FakeWebDavServer {
     private val files = HashMap<String, Entry>()
     private val createdDirs = HashSet<String>()
     private var etagCounter = 0
+
+    /** 最近一次 GET 收到的 Accept-Encoding，供测试断言客户端是否显式声明了 identity。 */
+    var lastGetAcceptEncoding: String? = null
+        private set
+
+    /**
+     * 模拟「无视 Accept-Encoding、一律以压缩表示返回 ETag」的服务器或代理。
+     * Apache mod_deflate 会在压缩响应上把 ETag 改写成 `"...-gzip"`，而 PUT 上传的是未压缩实体，
+     * 服务器按未压缩表示的 ETag 比较——客户端若原样回送这个后缀，必然 412。
+     */
+    var forceGzipEtag = false
 
     private lateinit var server: EmbeddedServer<*, *>
     var port: Int = 0
@@ -80,11 +92,12 @@ class FakeWebDavServer {
             }
 
             "GET" -> {
+                lastGetAcceptEncoding = call.request.headers["Accept-Encoding"]
                 val entry = files[path]
                 if (entry == null) {
                     call.respondText("", status = HttpStatusCode.NotFound)
                 } else {
-                    call.response.header("ETag", entry.etag)
+                    call.response.header("ETag", if (forceGzipEtag) gzipForm(entry.etag) else entry.etag)
                     call.respondText(entry.content)
                 }
             }
@@ -123,4 +136,8 @@ class FakeWebDavServer {
     }
 
     private fun strongForm(etag: String): String = etag.removePrefix("W/")
+
+    /** Apache mod_deflate 对压缩响应追加 `-gzip` 后缀：`W/"etag-1"` → `W/"etag-1-gzip"`。 */
+    private fun gzipForm(etag: String): String =
+        if (etag.endsWith("\"")) etag.dropLast(1) + "-gzip\"" else etag
 }

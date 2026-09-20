@@ -37,7 +37,7 @@ sealed interface SyncStatus {
  * 2. 与本地 LWW 合并（[SyncMerge]），合并结果写回本地；
  * 3. 带乐观锁上传（If-Match），412 冲突则重新下载合并，最多 3 次。
  *
- * 触发时机：应用启动、本地修改后防抖 2 秒、手动刷新。
+ * 触发时机：应用启动 / 回到前台（[syncOnForeground]）、本地修改后防抖 2 秒、手动刷新。
  */
 class SyncEngine(
     private val repository: TodoRepository,
@@ -76,6 +76,21 @@ class SyncEngine(
             return null
         }
         return scope.launch { performSync() }.also { syncJob = it }
+    }
+
+    /**
+     * 应用回到前台时调用（见 `com.todoapp.ui.AppForegroundEffect`）。
+     * 返回被放行的同步任务；被节流或已有同步在跑时返回 null。两层护栏：
+     * - 已有同步在跑/排队 → 跳过。Android 冷启动会同时触发 `ON_START` 与首次组合，
+     *   不挡一下会连发两次同步；
+     * - 距上次**成功**同步不足 [FOREGROUND_MIN_INTERVAL_MILLIS] → 跳过，避免在应用间
+     *   来回切换时反复打服务器。从未成功过（lastSyncAt == 0）则放行，让失败的同步能重试。
+     */
+    fun syncOnForeground(): Job? {
+        if (syncJob?.isActive == true) return null
+        val lastSuccess = settingsStore.lastSyncAt
+        if (lastSuccess > 0 && clock() - lastSuccess < FOREGROUND_MIN_INTERVAL_MILLIS) return null
+        return syncNow()
     }
 
     /**
@@ -158,5 +173,6 @@ class SyncEngine(
         const val DEBOUNCE_MILLIS = 2_000L
         const val MAX_CONFLICT_RETRIES = 3
         const val TOMBSTONE_TTL_MILLIS = 90L * 24 * 3600 * 1000
+        const val FOREGROUND_MIN_INTERVAL_MILLIS = 20_000L
     }
 }

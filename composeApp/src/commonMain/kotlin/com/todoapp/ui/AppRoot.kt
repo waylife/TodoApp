@@ -19,7 +19,6 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,7 +43,9 @@ private enum class AppTab(val label: String) {
 /** 平台入口持有 [AppContainer] 并传入。[initialTab] 用于自动化验证时指定起始页。 */
 @Composable
 fun App(container: AppContainer, initialTab: String = "TODOS") {
-    LaunchedEffect(Unit) { container.syncEngine.syncNow() }
+    // 冷启动与「从后台切回前台」都走这一条路径（各平台实现见 AppForegroundEffect），
+    // 重复触发由 SyncEngine.syncOnForeground 的节流兜住
+    AppForegroundEffect { container.syncEngine.syncOnForeground() }
 
     TodoTheme {
         AppNav(container, initialTab)

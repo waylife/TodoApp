@@ -56,6 +56,12 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
     suspend fun downloadFile(): Pair<String?, String?> {
         val response: HttpResponse = httpClient.get(fileUrl()) {
             header(HttpHeaders.Authorization, authHeader())
+            // 显式声明 identity：OkHttp 默认会加 Accept-Encoding: gzip 并透明解压，
+            // 而 Apache mod_deflate 对压缩过的响应会把 ETag 改写成 "...-gzip"（RFC 7232
+            // 意义上「压缩表示」与「原始表示」本就是不同的 entity-tag）。该 ETag 拿去
+            // 做 PUT 的 If-Match 时，服务器按未压缩表示比较，必然 412。
+            // 让 GET 与 PUT 使用同一表示，从源头避免这种不匹配。
+            header(HttpHeaders.AcceptEncoding, "identity")
         }
         return when {
             response.status == HttpStatusCode.NotFound -> null to response.headers[HttpHeaders.ETag]
@@ -103,12 +109,18 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
     }
 
     /**
-     * 归一化 ETag 供 If-Match 使用：去掉弱校验前缀 `W/`。
-     * [downloadFile] 拿到的值可能带 `W/`（实测 Teracloud/Apache 会间歇性返回 `W/"..."`），
-     * 而 If-Match 按 RFC 7232 §3.1 只做强比较，弱校验值必然被服务器拒为 412，
-     * 会让同步一直误判成「被其它设备修改」。
+     * 归一化 ETag 供 If-Match 使用，剥掉两类会让服务器必然返回 412 的修饰：
+     * - 弱校验前缀 `W/`。[downloadFile] 拿到的值可能带 `W/`（实测 Teracloud/Apache 会
+     *   间歇性返回 `W/"..."`），而 If-Match 按 RFC 7232 §3.1 只做强比较，弱校验值会被拒。
+     * - `-gzip` 后缀。Apache mod_deflate 压缩响应时会把 ETag 改写成 `"...-gzip"`，它标识的是
+     *   「压缩后的表示」；而 PUT 上传的是未压缩实体，服务器按未压缩表示的 ETag 比较，
+     *   原样送出同样必然 412。GET 侧已改用 identity 规避，这里作为代理强制压缩时的兜底。
      */
-    private fun strongEtag(etag: String?): String? = etag?.trim()?.removePrefix("W/")
+    private fun strongEtag(etag: String?): String? {
+        var value = etag?.trim()?.removePrefix("W/") ?: return null
+        if (value.endsWith("-gzip\"")) value = value.removeSuffix("-gzip\"") + "\""
+        return value
+    }
 
     /**
      * 逐级 MKCOL 创建远程目录。URL 必须带结尾斜杠：集合已存在时，Apache 系服务器
