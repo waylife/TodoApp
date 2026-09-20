@@ -15,3 +15,7 @@ DerivedData/
 # xcodegen 生成物：运行 `cd iosApp && xcodegen generate` 重建
 iosApp/iosApp.xcodeproj
 iosApp/iosApp/Info.plist
+# Android 签名密钥库：不入库。密码在 local.properties（已忽略），
+# 见 scripts/build_release_apk.sh；密钥库一旦丢失，已安装的旧版本将无法覆盖升级。
+*.jks
+*.keystore
