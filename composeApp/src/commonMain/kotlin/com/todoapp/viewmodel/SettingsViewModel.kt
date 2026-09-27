@@ -41,6 +41,9 @@ class SettingsViewModel(
     private val syncEngine: SyncEngine,
     private val httpClient: HttpClient,
     private val appScope: CoroutineScope,
+    /** 连接测试可注入，便于测试替身；生产用真实 WebDavClient。 */
+    private val connectionTester: suspend (WebDavConfig) -> Result<String> =
+        { config -> WebDavClient(httpClient, config).testConnection() },
 ) {
     private val _testing = MutableStateFlow(false)
     private val _testResult = MutableStateFlow<Pair<Boolean, String>?>(null)
@@ -91,16 +94,13 @@ class SettingsViewModel(
         _testing.value = true
         _testResult.value = null
         appScope.launch {
-            val client = WebDavClient(
-                httpClient,
-                WebDavConfig(
-                    serverUrl = serverUrl.trim().trimEnd('/'),
-                    username = username.trim(),
-                    password = password,
-                    remoteDir = remoteDir.trim().trim('/').ifEmpty { WebDavConfig.DEFAULT_REMOTE_DIR },
-                ),
+            val config = WebDavConfig(
+                serverUrl = serverUrl.trim().trimEnd('/'),
+                username = username.trim(),
+                password = password,
+                remoteDir = remoteDir.trim().trim('/').ifEmpty { WebDavConfig.DEFAULT_REMOTE_DIR },
             )
-            val result = client.testConnection()
+            val result = connectionTester(config)
             _testing.value = false
             _testResult.value = result.fold(
                 onSuccess = { true to it },
