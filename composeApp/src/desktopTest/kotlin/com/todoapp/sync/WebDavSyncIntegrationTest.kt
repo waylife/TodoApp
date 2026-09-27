@@ -4,6 +4,9 @@ import com.russhwolf.settings.PreferencesSettings
 import com.todoapp.data.SettingsStore
 import com.todoapp.data.TodoRepository
 import com.todoapp.data.WebDavConfig
+import com.todoapp.model.RemoteSnapshot
+import com.todoapp.model.TodoItem
+import com.todoapp.model.TodoList
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.todoapp.db.AppDatabase
 import io.ktor.client.HttpClient
@@ -16,6 +19,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.prefs.Preferences
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -388,6 +393,92 @@ class WebDavSyncIntegrationTest {
         assertEquals(
             listOf("A 的清单"),
             repoB.lists.value.filter { it.deletedAt == null }.map { it.name },
+        )
+    }
+
+    @Test
+    fun `合并窗口内的用户编辑不会被整体写库清掉`() = runBlocking {
+        // 独立构造设备：时钟要在「取快照之后、合并写库之前」注入一次用户编辑，
+        // 模拟同步窗口内（下载完成 → replaceAll 执行）的并发修改
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        AppDatabase.Schema.create(driver)
+        val repo = TodoRepository(AppDatabase(driver), clock = { testTime })
+        val settingsNode = Preferences.userRoot().node("/com/todoapp/test/race-${System.nanoTime()}")
+        val store = SettingsStore(PreferencesSettings(settingsNode))
+        store.saveConfig(
+            WebDavConfig(serverUrl = "http://127.0.0.1:${server.port}", username = "user", password = "pass", remoteDir = "dav/ToDoApp"),
+        )
+        val list = repo.addList("工作")
+        repo.addItem(list.id, "既有事项")
+        testTime += 100
+
+        var armed = false
+        var clockCalls = 0
+        val engine = SyncEngine(
+            repository = repo,
+            settingsStore = store,
+            httpClient = HttpClient(CIO),
+            scope = scope,
+            clock = {
+                // 引擎时钟只在 merge 与同步收尾处调用（快照 savedAt 走仓库自己的时钟）。
+                // 第 1 次调用 = 第 1 轮 merge，编辑注入此处，恰好落在「快照之后、
+                // replaceAll 之前」的竞态窗口内；写前检测应放弃本轮、重走一轮把编辑并入。
+                if (armed) {
+                    clockCalls++
+                    if (clockCalls == 1) repo.addItem(list.id, "窗口内的编辑")
+                }
+                testTime
+            },
+        )
+
+        sync(engine) // 先同步一次，让远端有内容，覆盖更危险的非首次同步场景
+        armed = true
+        clockCalls = 0
+        sync(engine)
+
+        val uploaded = server.fileContent("dav/ToDoApp/todoapp.json")
+        val surviving = assertNotNull(
+            repo.items.value.firstOrNull { it.title == "窗口内的编辑" },
+            "窗口内的编辑不应被 replaceAll 清掉",
+        )
+        assertTrue(
+            uploaded!!.contains("窗口内的编辑"),
+            "窗口内的编辑应进入合并结果并被上传，实际：${uploaded.take(600)}",
+        )
+        assertTrue(surviving.deletedAt == null, "编辑应保持存活而非墓碑")
+    }
+
+    @Test
+    fun `远端快照版本过新时同步报错且不降级覆写`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "本地事项")
+        testTime += 100
+        sync(engineA)
+
+        // 模拟未来版本的应用写入了 v2 快照，含本端不认识的数据
+        val future = RemoteSnapshot(
+            schemaVersion = 2,
+            rev = 9,
+            savedAt = testTime,
+            lists = listOf(TodoList(id = "future-list", name = "新版清单", createdAt = 1, updatedAt = 1)),
+            items = listOf(TodoItem(id = "future-item", listId = "future-list", title = "新版待办", createdAt = 1, updatedAt = 1)),
+        )
+        server.putFile(PATH, Json.encodeToString(future))
+
+        val job = assertNotNull(engineA.syncNow())
+        withTimeout(15_000) { job.join() }
+
+        val status = assertNotNull(
+            engineA.status.value as? SyncStatus.Error,
+            "实际：${engineA.status.value}",
+        )
+        assertTrue(status.message.contains("升级"), "应提示升级应用，实际：${status.message}")
+        assertNull(repoA.items.value.firstOrNull { it.id == "future-item" }, "新版数据不得被合并进本机")
+        assertEquals("本地事项", repoA.items.value.single { it.deletedAt == null }.title, "本机数据不得被整体替换")
+        assertTrue(
+            server.fileContent(PATH)!!.contains("新版待办"),
+            "远端 v2 快照不得被降级覆写",
         )
     }
 

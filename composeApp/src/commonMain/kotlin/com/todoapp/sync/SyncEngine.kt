@@ -35,7 +35,10 @@ sealed interface SyncStatus {
  * 同步引擎：
  * 1. 下载远程 todoapp.json（404 = 首次同步）；
  * 2. 与本地 LWW 合并（[SyncMerge]），合并结果写回本地；
- * 3. 带乐观锁上传（If-Match），412 冲突则重新下载合并，最多 3 次。
+ * 3. 带乐观锁上传（If-Match），412 冲突或合并期间出现并发编辑则重新下载合并，最多 [MAX_SYNC_ATTEMPTS] 轮。
+ *
+ * 冲突解决依赖各设备本地时钟的 updatedAt（实体级 last-write-wins），
+ * 时钟明显偏快的设备会在冲突中获胜——这是整文件快照同步的已知取舍。
  *
  * 触发时机：应用启动 / 回到前台（[syncOnForeground]）、本地修改后防抖 2 秒、手动刷新。
  */
@@ -126,15 +129,28 @@ class SyncEngine(
             var attempt = 0
             while (true) {
                 val (remoteJson, etag) = client.downloadFile()
-                val remote = remoteJson?.let { json.decodeFromString<RemoteSnapshot>(it) } ?: RemoteSnapshot()
+                val remote = decodeRemoteSnapshot(remoteJson)
+                val versionBefore = repository.changeVersion
                 val local = repository.currentSnapshot()
                 val merged = SyncMerge.merge(local, remote, clock())
+                // 写库前检测：快照/合并窗口内出现了用户编辑就必须重算——
+                // replaceAll 是全删全插，写库之后这些编辑就真没了，重试也救不回来
+                if (repository.changeVersion != versionBefore) {
+                    if (++attempt >= MAX_SYNC_ATTEMPTS) throw WebDavException("同步期间数据持续变化，请稍后重试")
+                    continue
+                }
                 repository.replaceAll(merged.lists, merged.items)
+                // 写库后检测：replaceAll 执行期间恰好落库、未被事务清掉的编辑，
+                // 借下一轮重新快照并入合并结果并补推（onLocalChange 在写库期间被临时关闭）
+                if (repository.changeVersion != versionBefore) {
+                    if (++attempt >= MAX_SYNC_ATTEMPTS) throw WebDavException("同步期间数据持续变化，请稍后重试")
+                    continue
+                }
                 try {
                     client.uploadFile(json.encodeToString(merged), etag, isNew = remoteJson == null)
                     break
                 } catch (e: WebDavConflictException) {
-                    if (++attempt >= MAX_CONFLICT_RETRIES) throw e
+                    if (++attempt >= MAX_SYNC_ATTEMPTS) throw e
                 }
             }
             settingsStore.lastSyncAt = clock()
@@ -148,6 +164,25 @@ class SyncEngine(
         } catch (e: Exception) {
             _status.value = SyncStatus.Error("同步失败：${e.message ?: e::class.simpleName}", settingsStore.lastSyncAt.takeIf { it > 0 })
         }
+    }
+
+    /**
+     * 解码远端快照。两道防线都在写本地库**之前**：
+     * - 内容损坏 → 报错终止，绝不能用「解码失败即空快照」的方式把远端清空；
+     * - schemaVersion 更新 → 报错终止。解码配置 ignoreUnknownKeys 会静默丢掉不认识的字段，
+     *   若不拦截，合并回传会把新版快照降级覆写，新版应用写入的数据就此永久丢失。
+     */
+    private fun decodeRemoteSnapshot(text: String?): RemoteSnapshot {
+        if (text == null) return RemoteSnapshot()
+        val remote = try {
+            json.decodeFromString<RemoteSnapshot>(text)
+        } catch (e: Exception) {
+            throw WebDavException("远端数据无法解析（可能已损坏），可在设置中删除远端数据后重建")
+        }
+        if (remote.schemaVersion > RemoteSnapshot.SCHEMA_VERSION) {
+            throw WebDavException("远端数据由更新版本的应用创建（格式 v${remote.schemaVersion}），请先升级本应用")
+        }
+        return remote
     }
 
     /** 删除远端快照；[clearLocal] 为真时连同本机数据一起清空。调用方需已持有 [mutex]。 */
@@ -171,7 +206,9 @@ class SyncEngine(
 
     private companion object {
         const val DEBOUNCE_MILLIS = 2_000L
-        const val MAX_CONFLICT_RETRIES = 3
+
+        /** 单次同步的最多轮数，覆盖 412 冲突重试与「合并窗口内出现并发编辑」的重试。 */
+        const val MAX_SYNC_ATTEMPTS = 5
         const val TOMBSTONE_TTL_MILLIS = 90L * 24 * 3600 * 1000
         const val FOREGROUND_MIN_INTERVAL_MILLIS = 20_000L
     }

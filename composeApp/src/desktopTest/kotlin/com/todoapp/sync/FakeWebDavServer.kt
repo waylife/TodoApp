@@ -71,6 +71,12 @@ class FakeWebDavServer {
 
     fun fileContent(path: String): String? = files[path]?.content
 
+    /** 测试预置远端文件（绕过客户端，模拟其它设备写入或已存在的旧数据）。 */
+    fun putFile(path: String, content: String) {
+        etagCounter += 1
+        files[path] = Entry(content, "W/\"etag-$etagCounter\"")
+    }
+
     private suspend fun RoutingContext.handleRequest() {
         val rawPath = call.request.path()
         val path = rawPath.trim('/')
