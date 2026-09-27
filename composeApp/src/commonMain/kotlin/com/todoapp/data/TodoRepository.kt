@@ -8,6 +8,7 @@ import com.todoapp.util.newId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import com.todoapp.db.TodoList as DbList
 import com.todoapp.db.TodoItem as DbItem
 
@@ -21,6 +22,15 @@ class TodoRepository(
 ) {
     /** 本地数据变更后回调，用于触发防抖同步；同步引擎整体写库时会临时关闭。 */
     var onLocalChange: (() -> Unit)? = null
+
+    private val _changeCounter = MutableStateFlow(0L)
+
+    /**
+     * 用户变更计数（单调递增）。同步引擎在「取快照」前后各读一次，两次之间若计数变化，
+     * 说明合并窗口内有并发编辑，需要重走一轮合并——这是防丢编辑竞态的唯一检测手段。
+     * 只统计用户驱动的写操作；[replaceAll] 等引擎整体写库不计数。
+     */
+    val changeVersion: Long get() = _changeCounter.value
 
     private val _lists = MutableStateFlow<List<TodoList>>(emptyList())
     val lists: StateFlow<List<TodoList>> = _lists.asStateFlow()
@@ -61,12 +71,20 @@ class TodoRepository(
 
     fun deleteList(id: String) {
         val now = clock()
-        // 清单墓碑化，其下所有事项一并墓碑化，保证删除同步到其它设备
+        // 清单墓碑化，其下所有事项一并墓碑化，保证删除同步到其它设备。
+        // 落库必须同事务：中途崩溃不能留下「清单已删、部分事项存活」的半删状态，
+        // 存活事项会带着孤儿 listId 同步到其它设备。
         val tomb = _lists.value.firstOrNull { it.id == id }?.copy(deletedAt = now, updatedAt = now) ?: return
-        persistList(tomb)
-        _items.value.filter { it.listId == id && it.deletedAt == null }.forEach {
-            persistItem(it.copy(deletedAt = now, updatedAt = now))
+        val victims = _items.value.filter { it.listId == id && it.deletedAt == null }
+            .map { it.copy(deletedAt = now, updatedAt = now) }
+        db.transaction {
+            upsertListDb(tomb)
+            victims.forEach(::upsertItemDb)
         }
+        _lists.value = _lists.value.filterNot { it.id == tomb.id } + tomb
+        _items.value = _items.value.map { item -> victims.firstOrNull { it.id == item.id } ?: item }
+        _changeCounter.update { it + 1 }
+        onLocalChange?.invoke()
     }
 
     // ---------- 待办 ----------
@@ -134,8 +152,8 @@ class TodoRepository(
             db.transaction {
                 db.todoQueries.deleteAllLists()
                 db.todoQueries.deleteAllItems()
-                lists.forEach { db.todoQueries.upsertList(it.id, it.name, it.sort, it.createdAt, it.updatedAt, it.deletedAt) }
-                items.forEach { db.todoQueries.upsertItem(it.id, it.listId, it.title, it.note, boolToInt(it.done), it.dueAt, it.createdAt, it.updatedAt, it.deletedAt) }
+                lists.forEach(::upsertListDb)
+                items.forEach(::upsertItemDb)
             }
             reloadFromDb()
         } finally {
@@ -145,8 +163,10 @@ class TodoRepository(
 
     /** 清理 [before] 之前的墓碑，避免库无限膨胀。 */
     fun purgeDeleted(before: Long) {
-        db.todoQueries.purgeListsDeletedBefore(before)
-        db.todoQueries.purgeItemsDeletedBefore(before)
+        db.transaction {
+            db.todoQueries.purgeListsDeletedBefore(before)
+            db.todoQueries.purgeItemsDeletedBefore(before)
+        }
         reloadFromDb()
     }
 
@@ -165,16 +185,24 @@ class TodoRepository(
     // ---------- 内部 ----------
 
     private fun persistList(list: TodoList) {
-        db.todoQueries.upsertList(list.id, list.name, list.sort, list.createdAt, list.updatedAt, list.deletedAt)
+        upsertListDb(list)
         _lists.value = _lists.value.filterNot { it.id == list.id } + list
+        _changeCounter.update { it + 1 }
         onLocalChange?.invoke()
     }
 
     private fun persistItem(item: TodoItem) {
-        db.todoQueries.upsertItem(item.id, item.listId, item.title, item.note, boolToInt(item.done), item.dueAt, item.createdAt, item.updatedAt, item.deletedAt)
+        upsertItemDb(item)
         _items.value = _items.value.filterNot { it.id == item.id } + item
+        _changeCounter.update { it + 1 }
         onLocalChange?.invoke()
     }
+
+    private fun upsertListDb(list: TodoList) =
+        db.todoQueries.upsertList(list.id, list.name, list.sort, list.createdAt, list.updatedAt, list.deletedAt)
+
+    private fun upsertItemDb(item: TodoItem) =
+        db.todoQueries.upsertItem(item.id, item.listId, item.title, item.note, boolToInt(item.done), item.dueAt, item.createdAt, item.updatedAt, item.deletedAt)
 }
 
 /** 库中 done 为 INTEGER，落库前转换。 */

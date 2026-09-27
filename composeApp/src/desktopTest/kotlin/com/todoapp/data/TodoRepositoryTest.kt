@@ -252,6 +252,37 @@ class TodoRepositoryTest {
         assertEquals(0, changes, "清空本机数据的意图是让数据消失，不应再同步出去")
     }
 
+    // ---------- 变更计数 ----------
+
+    @Test
+    fun `changeVersion 随用户变更单调递增`() {
+        val before = repo.changeVersion
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        repo.setDone(a.id, true)
+        repo.renameList(l.id, "工作A")
+        repo.deleteItem(a.id)
+        repo.deleteList(l.id)
+
+        assertTrue(repo.changeVersion > before, "六次用户变更至少各递增一次")
+    }
+
+    @Test
+    fun `replaceAll 与 purgeDeleted 不递增变更计数`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        repo.deleteItem(a.id)
+        repo.deleteList(l.id)
+        val before = repo.changeVersion
+
+        val synced = TodoList(id = "l1", name = "同步来的清单", sort = 1, createdAt = 1L, updatedAt = 1L)
+        val syncedItem = TodoItem(id = "a1", listId = "l1", title = "同步来的待办", createdAt = 1L, updatedAt = 1L)
+        repo.replaceAll(listOf(synced), listOf(syncedItem))
+        repo.purgeDeleted(0L)
+
+        assertEquals(before, repo.changeVersion, "引擎整体写库不是用户变更，不应递增，否则同步会误判并发编辑")
+    }
+
     // ---------- 同步支撑 ----------
 
     @Test
