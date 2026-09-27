@@ -13,7 +13,10 @@ data class WebDavConfig(
     val remoteDir: String = DEFAULT_REMOTE_DIR,
 ) {
     val isConfigured: Boolean
-        get() = serverUrl.trim().startsWith("http") && remoteDir.isNotBlank()
+        get() {
+            val url = serverUrl.trim()
+            return (url.startsWith("http://") || url.startsWith("https://")) && remoteDir.isNotBlank()
+        }
 
     companion object {
         const val DEFAULT_REMOTE_DIR = "ToDoApp"
