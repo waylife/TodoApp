@@ -27,7 +27,12 @@ data class PlanUiState(
     val isEmpty: Boolean get() = overdue.isEmpty() && groups.all { it.second.isEmpty() }
 }
 
-class PlanViewModel(private val repository: TodoRepository, appScope: CoroutineScope) {
+class PlanViewModel(
+    private val repository: TodoRepository,
+    appScope: CoroutineScope,
+    /** 「今天」可注入，便于测试固定日期；生产用系统当前日。 */
+    private val todayProvider: () -> LocalDate = { Dates.today() },
+) {
 
     private val _range = MutableStateFlow(PlanRange.TODAY)
 
@@ -36,7 +41,7 @@ class PlanViewModel(private val repository: TodoRepository, appScope: CoroutineS
         repository.lists,
         _range,
     ) { items, lists, range ->
-        val today = Dates.today()
+        val today = todayProvider()
         val grouped = PlanGrouper.group(items, range, today)
         PlanUiState(
             range = range,
