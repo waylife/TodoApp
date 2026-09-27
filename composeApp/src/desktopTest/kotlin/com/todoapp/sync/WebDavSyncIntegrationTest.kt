@@ -482,6 +482,30 @@ class WebDavSyncIntegrationTest {
         )
     }
 
+    @Test
+    fun `远端内容损坏时报错且不动本地数据`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "本地事项")
+        testTime += 100
+        sync(engineA)
+
+        // 远端文件被外部写坏（截断/乱码）：绝不能当成「远端为空」清掉本地，也不能把合并结果覆写回去
+        val garbage = "这不是 JSON{{{"
+        server.putFile(PATH, garbage)
+
+        val job = assertNotNull(engineA.syncNow())
+        withTimeout(15_000) { job.join() }
+
+        val status = assertNotNull(
+            engineA.status.value as? SyncStatus.Error,
+            "实际：${engineA.status.value}",
+        )
+        assertTrue(status.message.contains("无法解析"), "应提示远端数据无法解析，实际：${status.message}")
+        assertEquals("本地事项", repoA.items.value.single { it.deletedAt == null }.title, "本机数据不得被改动")
+        assertEquals(garbage, server.fileContent(PATH), "损坏的远端内容不得被合并结果覆写")
+    }
+
     private companion object {
         const val PATH = "dav/ToDoApp/todoapp.json"
     }
