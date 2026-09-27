@@ -46,8 +46,12 @@ internal fun openTodoDbDriver(dbFile: File): SqlDriver {
     when {
         !hasTables -> schema.create(driver)
         userVersion < schema.version -> schema.migrate(driver, userVersion, schema.version)
+        // userVersion > schema.version：库由更新的应用版本写入。不迁移也不降级版本号，
+        // 否则应用再升级时会对已迁移过的库重复执行迁移（如 ADD COLUMN 直接报错）。
     }
-    driver.execute(null, "PRAGMA user_version = ${schema.version}", 0, null)
+    if (userVersion < schema.version) {
+        driver.execute(null, "PRAGMA user_version = ${schema.version}", 0, null)
+    }
     return driver
 }
 

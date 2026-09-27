@@ -51,6 +51,32 @@ class DesktopDbMigrationTest {
         }
     }
 
+    @Test
+    fun `更高版本号的库重开时不降级版本号`() {
+        val dbFile = tempDbFile()
+        val first = openTodoDbDriver(dbFile)
+        AppDatabase(first).todoQueries.upsertList("l1", "工作", 1, 1, 1, null)
+        first.close()
+
+        // 模拟应用被回滚到旧版本前，库已被更新的应用迁移到更高 schema 版本
+        val reopen = openTodoDbDriver(dbFile)
+        reopen.execute(null, "PRAGMA user_version = 9", 0, null)
+        reopen.close()
+
+        val third = openTodoDbDriver(dbFile)
+        try {
+            val db = AppDatabase(third)
+            assertEquals(listOf("工作"), db.todoQueries.selectAllLists().executeAsList().map { it.name }, "数据应保留")
+            assertEquals(
+                9L,
+                driverVersion(third),
+                "版本号只升不降：否则应用再升级时会对已迁移过的库重复执行迁移",
+            )
+        } finally {
+            third.close()
+        }
+    }
+
     /** 与 readUserVersion 解耦，直接从驱动读，顺便交叉验证写入值。 */
     private fun driverVersion(driver: SqlDriver): Long {
         var version = -1L
