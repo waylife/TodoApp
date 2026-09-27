@@ -33,7 +33,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 85 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 178 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -109,19 +109,64 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 
 ## 测试
 
+### 一键运行（日常入口）
+
 ```bash
-./gradlew :composeApp:desktopTest         # 全部 85 个用例，跑在 JVM 目标上
+scripts/run_tests.sh                        # 全量跑（178 个用例，JVM 上）
+scripts/run_tests.sh --filter SyncMerge     # 只跑名字匹配的测试类
+scripts/run_tests.sh --filter "TodosViewModel 搜索"
+scripts/run_tests.sh --rerun                # 忽略 up-to-date 缓存强制重跑
+scripts/run_tests.sh --ios                  # 追加 iOS 模拟器测试（需 Xcode，较慢）
+scripts/run_tests.sh --help
 ```
+
+跑完自动汇总通过/失败数量并列出失败用例与原因，详细报告在
+`composeApp/build/reports/tests/desktopTest/index.html`。其余无法识别的参数原样透传给
+`gradlew`（如 `--info`）。等价的原始命令是 `./gradlew :composeApp:desktopTest`。
+
+### TDD 工作流（红-绿-重构）
+
+改动业务逻辑时按下面的循环走，`scripts/run_tests.sh` 就是循环里的「跑测试」：
+
+1. **红**：先把用例写出来描述期望行为，跑一次并确认失败。编译失败也算红——
+   它通常意味着测试暴露了缺失的依赖注入接缝（见下文两处实例）；
+2. **绿**：用最直接的实现让用例通过；
+3. **重构**：保持全绿的前提下整理实现，随时重跑。
+
+本仓库为可测试性做的约定：
+
+- **时间可注入**：仓库与同步引擎收 `clock: () -> Long`，计划页收 `todayProvider`，
+  测试里固定时间，不依赖真实时钟；
+- **平台能力用假实现**：文件选择器（`DocumentTransfer`）、WebDAV 服务器
+  （`FakeWebDavServer`）、连接测试器（注入到 `SettingsViewModel`）都有测试替身；
+- **ViewModel 用即时作用域**：测试里通过 `TestScope.eagerTestScope()`
+  （`desktopTest` 的 `testing` 包）构造作用域，`stateIn`/`launch` 同步执行、变更后立即可断言。
+  不要用 `backgroundScope` + `advanceUntilIdle()`——当前 coroutines-test 版本下，
+  后台共享协程只在测试体挂起时被调度，`advanceUntilIdle` 驱动不了它们；
+- **纯函数优先**：合并（`SyncMerge`）、分组（`PlanGrouper`）、备份语义（`TodoTransfer`）
+  都是无副作用的 object，单测不需要任何夹具。
+
+### 用例分布（178 个）
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
+| `TodoRepositoryTest` | 20 | 仓库层：CRUD 与局部更新语义（空白标题回退、dueAtChanged 门控）、落库后由新实例读回、变更回调逐次触发/同步写库时静默、replaceAll、clearAll、purgeDeleted 墓碑清理 |
+| `TodosViewModelTest` | 15 | 清单页：过滤与搜索（标题/备注、忽略大小写）、未完成排序与已完成分区、添加待办的目标清单选择（自动建「默认」清单、**选中清单被远端删除后回退到存活清单**）、清单删除与选中态、toggleDone |
+| `TodoTransferTest` | 24 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
+| `WebDavSyncIntegrationTest` | 15 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试、压缩表示的 ETag 归一化、回到前台的节流 |
+| `TransferViewModelTest` | 14 | 导入导出界面：导出文案与快照同构、取消/失败分支、忙碌保护、解析-预览-确认流程、合并/覆盖导入语义、未确认不写库、dismiss 后确认是无操作 |
+| `DesktopDocumentTransferTest` | 12 | 桌面端**真实**读写路径（只把弹对话框换成固定返回值）：写盘/覆盖写/路径不可写、读回、往返后墓碑不丢、SAVE 与 LOAD 模式、建议文件名透传、超大文件在读取前被拦下且边界值放行 |
+| `DataTransferIntegrationTest` | 10 | 导入导出端到端：真实内存库 + 真实同步引擎，只把文件选择器换成内存实现；覆盖导出内容、取消/失败分支、解析失败不动数据、关闭确认框后不写入、导入后主动同步到远端 |
 | `SyncMergeTest` | 8 | 合并算法：新增、并发编辑、删除优先、删除后复活、参数顺序对称性（保证多端收敛） |
 | `PlanGrouperTest` | 8 | 计划页分组：过滤无日期/已完成/已删除项、逾期不重复展示、范围边界、组内排序 |
+| `WebDavConfigTest` | 8 | 连接配置判定：`http://`/`https://` 前缀校验（`httpfoo` 之类不算合法）、空白地址/目录 |
+| `SyncEngineTest` | 7 | 同步触发与护栏：未配置分支（syncNow/scheduleSync/deleteRemoteData）、前台节流（20 秒内跳过、从未成功则放行）、防抖到期触发、**删除远端数据前先取消排队中的防抖同步** |
 | `PlanRangeTest` | 7 | 今日/本周/两周/一个月范围计算，含跨周与跨年推算 |
-| `WebDavSyncIntegrationTest` | 15 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试、压缩表示的 ETag 归一化、回到前台的节流 |
-| `TodoTransferTest` | 24 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
-| `DataTransferIntegrationTest` | 10 | 导入导出端到端：真实内存库 + 真实同步引擎，只把文件选择器换成内存实现；覆盖导出内容、取消/失败分支、解析失败不动数据、关闭确认框后不写入、导入后主动同步到远端 |
-| `DesktopDocumentTransferTest` | 12 | 桌面端**真实**读写路径（只把弹对话框换成固定返回值）：写盘/覆盖写/路径不可写、读回、往返后墓碑不丢、SAVE 与 LOAD 模式、建议文件名透传、超大文件在读取前被拦下且边界值放行 |
+| `DatesFormatTest` | 6 | 日期文案：今天/明天/昨天、星期、紧凑日期、时刻补零、同步时间组合 |
+| `SettingsViewModelTest` | 6 | 设置页：保存配置归一化并立即同步、非法地址置 NotConfigured、连接测试（空地址本地拦截 + 注入测试器回显）、lastSyncAt 展示与清空后归零、远端路径拼接 |
+| `PlanViewModelTest` | 6 | 计划页：范围切换、逾期置顶且不重复出现在日期分组、已完成/已删除/无日期过滤、清单名映射（today 注入固定日期） |
+| `SettingsStoreTest` | 6 | 设置存储：默认值、保存归一化、空目录回退默认、新实例从持久层读回、lastSyncAt |
+| `EditSessionTest` | 5 | 编辑会话：打开/保存（更新并关闭）/删除并关闭、条目被外部删除后面板显示为空 |
 | `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
 
 集成测试会在进程内启动一个**迷你 WebDAV 服务**（支持 MKCOL/GET/PUT 与 ETag），用两台独立
@@ -310,8 +355,8 @@ composeApp/                    共享模块（UI + 数据 + 同步）
 ├── src/androidMain/           Android 平台实现（AndroidSqliteDriver / SharedPreferences / OkHttp / SAF）
 ├── src/desktopMain/           桌面入口与实现（JDBC SQLite / Preferences / CIO / AWT FileDialog）
 ├── src/iosMain/               iOS 入口与实现（NativeSqliteDriver / NSUserDefaults / Darwin / UIDocumentPicker）
-├── src/commonTest/            合并算法、计划分组、时间范围、备份编解码与导入语义单测
-└── src/desktopTest/           迷你 WebDAV 服务 + 端到端同步/导入导出集成测试 + 真实服务器冒烟测试
+├── src/commonTest/            合并算法、计划分组、时间范围与日期文案、备份编解码与导入语义、WebDAV 配置判定单测
+└── src/desktopTest/           仓库与 ViewModel 单测（内存库 + 可控时钟）+ 迷你 WebDAV 服务端到端集成测试 + 真实服务器冒烟测试
 
 androidApp/                    Android 应用模块（薄壳）
 iosApp/                        iOS 壳工程（project.yml 由 xcodegen 生成 .xcodeproj）
