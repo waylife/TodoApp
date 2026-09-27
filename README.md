@@ -33,7 +33,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 178 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 188 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -112,7 +112,7 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 ### 一键运行（日常入口）
 
 ```bash
-scripts/run_tests.sh                        # 全量跑（178 个用例，JVM 上）
+scripts/run_tests.sh                        # 全量跑（188 个用例，JVM 上）
 scripts/run_tests.sh --filter SyncMerge     # 只跑名字匹配的测试类
 scripts/run_tests.sh --filter "TodosViewModel 搜索"
 scripts/run_tests.sh --rerun                # 忽略 up-to-date 缓存强制重跑
@@ -146,15 +146,15 @@ scripts/run_tests.sh --help
 - **纯函数优先**：合并（`SyncMerge`）、分组（`PlanGrouper`）、备份语义（`TodoTransfer`）
   都是无副作用的 object，单测不需要任何夹具。
 
-### 用例分布（178 个）
+### 用例分布（188 个）
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
-| `TodoRepositoryTest` | 20 | 仓库层：CRUD 与局部更新语义（空白标题回退、dueAtChanged 门控）、落库后由新实例读回、变更回调逐次触发/同步写库时静默、replaceAll、clearAll、purgeDeleted 墓碑清理 |
+| `TodoRepositoryTest` | 22 | 仓库层：CRUD 与局部更新语义（空白标题回退、dueAtChanged 门控）、落库后由新实例读回、变更回调逐次触发/同步写库时静默、replaceAll、clearAll、purgeDeleted 墓碑清理、变更计数（用户变更递增、引擎写库不递增） |
 | `TodosViewModelTest` | 15 | 清单页：过滤与搜索（标题/备注、忽略大小写）、未完成排序与已完成分区、添加待办的目标清单选择（自动建「默认」清单、**选中清单被远端删除后回退到存活清单**）、清单删除与选中态、toggleDone |
 | `TodoTransferTest` | 24 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
-| `WebDavSyncIntegrationTest` | 15 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试、压缩表示的 ETag 归一化、回到前台的节流 |
-| `TransferViewModelTest` | 14 | 导入导出界面：导出文案与快照同构、取消/失败分支、忙碌保护、解析-预览-确认流程、合并/覆盖导入语义、未确认不写库、dismiss 后确认是无操作 |
+| `WebDavSyncIntegrationTest` | 17 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试、压缩表示的 ETag 归一化、回到前台的节流、**合并窗口内的并发编辑不被清掉**、**远端快照版本过新时报错且不降级覆写** |
+| `TransferViewModelTest` | 16 | 导入导出界面：导出文案与快照同构、取消/失败分支、忙碌保护、解析-预览-确认流程、合并/覆盖导入语义、未确认不写库、dismiss 后确认是无操作、导出/导入异常时复位 busy 并提示 |
 | `DesktopDocumentTransferTest` | 12 | 桌面端**真实**读写路径（只把弹对话框换成固定返回值）：写盘/覆盖写/路径不可写、读回、往返后墓碑不丢、SAVE 与 LOAD 模式、建议文件名透传、超大文件在读取前被拦下且边界值放行 |
 | `DataTransferIntegrationTest` | 10 | 导入导出端到端：真实内存库 + 真实同步引擎，只把文件选择器换成内存实现；覆盖导出内容、取消/失败分支、解析失败不动数据、关闭确认框后不写入、导入后主动同步到远端 |
 | `SyncMergeTest` | 8 | 合并算法：新增、并发编辑、删除优先、删除后复活、参数顺序对称性（保证多端收敛） |
@@ -163,9 +163,10 @@ scripts/run_tests.sh --help
 | `SyncEngineTest` | 7 | 同步触发与护栏：未配置分支（syncNow/scheduleSync/deleteRemoteData）、前台节流（20 秒内跳过、从未成功则放行）、防抖到期触发、**删除远端数据前先取消排队中的防抖同步** |
 | `PlanRangeTest` | 7 | 今日/本周/两周/一个月范围计算，含跨周与跨年推算 |
 | `DatesFormatTest` | 6 | 日期文案：今天/明天/昨天、星期、紧凑日期、时刻补零、同步时间组合 |
-| `SettingsViewModelTest` | 6 | 设置页：保存配置归一化并立即同步、非法地址置 NotConfigured、连接测试（空地址本地拦截 + 注入测试器回显）、lastSyncAt 展示与清空后归零、远端路径拼接 |
+| `SettingsViewModelTest` | 8 | 设置页：保存配置归一化并立即同步、非法地址置 NotConfigured、连接测试（空地址本地拦截 + 注入测试器回显、**测试器抛异常时复位 testing**、**在途时忽略重复触发**）、lastSyncAt 展示与清空后归零、远端路径拼接 |
 | `PlanViewModelTest` | 6 | 计划页：范围切换、逾期置顶且不重复出现在日期分组、已完成/已删除/无日期过滤、清单名映射（today 注入固定日期） |
 | `SettingsStoreTest` | 6 | 设置存储：默认值、保存归一化、空目录回退默认、新实例从持久层读回、lastSyncAt |
+| `DesktopDbMigrationTest` | 2 | 桌面端建库/迁移：全新库建表并写入 `PRAGMA user_version`、旧库重开数据保留且版本号补齐 |
 | `EditSessionTest` | 5 | 编辑会话：打开/保存（更新并关闭）/删除并关闭、条目被外部删除后面板显示为空 |
 | `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
 
