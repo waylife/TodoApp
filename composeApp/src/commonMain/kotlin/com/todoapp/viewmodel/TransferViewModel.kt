@@ -52,22 +52,29 @@ class TransferViewModel(
         if (_state.value.busy) return
         _state.value = _state.value.copy(busy = true, message = null)
         scope.launch {
-            val snapshot = repository.currentSnapshot()
-            val content = TodoTransfer.encode(snapshot)
-            val fileName = TodoTransfer.suggestedFileName(clock())
-            _state.value = when (val outcome = transfer.saveJson(fileName, content)) {
-                is TransferOutcome.Ok -> {
-                    val stats = TodoTransfer.stats(snapshot)
-                    val tombstones = stats.deletedLists + stats.deletedItems
-                    TransferUiState(
-                        message = "已导出 ${stats.lists} 个清单、${stats.items} 条待办" +
-                            (if (tombstones > 0) "（含 $tombstones 条已删除记录）" else "") +
-                            "\n位置：${outcome.value}",
-                    )
+            try {
+                val snapshot = repository.currentSnapshot()
+                val content = TodoTransfer.encode(snapshot)
+                val fileName = TodoTransfer.suggestedFileName(clock())
+                _state.value = when (val outcome = transfer.saveJson(fileName, content)) {
+                    is TransferOutcome.Ok -> {
+                        val stats = TodoTransfer.stats(snapshot)
+                        val tombstones = stats.deletedLists + stats.deletedItems
+                        TransferUiState(
+                            message = "已导出 ${stats.lists} 个清单、${stats.items} 条待办" +
+                                (if (tombstones > 0) "（含 $tombstones 条已删除记录）" else "") +
+                                "\n位置：${outcome.value}",
+                        )
+                    }
+                    // 用户点了取消，不是错误，也不该留提示
+                    TransferOutcome.Cancelled -> TransferUiState()
+                    is TransferOutcome.Failed -> TransferUiState(message = "导出失败：${outcome.message}", isError = true)
                 }
-                // 用户点了取消，不是错误，也不该留提示
-                TransferOutcome.Cancelled -> TransferUiState()
-                is TransferOutcome.Failed -> TransferUiState(message = "导出失败：${outcome.message}", isError = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 快照/编码等本进程错误：必须复位 busy 并提示，否则导出按钮永久禁用
+                _state.value = TransferUiState(message = "导出失败：${e.message ?: e::class.simpleName}", isError = true)
             }
         }
     }
@@ -77,10 +84,16 @@ class TransferViewModel(
         if (_state.value.busy) return
         _state.value = _state.value.copy(busy = true, message = null)
         scope.launch {
-            _state.value = when (val outcome = transfer.openJson()) {
-                is TransferOutcome.Ok -> parse(outcome.value.name, outcome.value.content)
-                TransferOutcome.Cancelled -> TransferUiState()
-                is TransferOutcome.Failed -> TransferUiState(message = "读取失败：${outcome.message}", isError = true)
+            try {
+                _state.value = when (val outcome = transfer.openJson()) {
+                    is TransferOutcome.Ok -> parse(outcome.value.name, outcome.value.content)
+                    TransferOutcome.Cancelled -> TransferUiState()
+                    is TransferOutcome.Failed -> TransferUiState(message = "读取失败：${outcome.message}", isError = true)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = TransferUiState(message = "读取失败：${e.message ?: e::class.simpleName}", isError = true)
             }
         }
     }
@@ -97,19 +110,24 @@ class TransferViewModel(
     fun confirmImport(mode: ImportMode) {
         val imported = pendingSnapshot ?: return
         pendingSnapshot = null
-        val now = clock()
-        val applied = TodoTransfer.apply(repository.currentSnapshot(), imported, mode, now)
-        repository.replaceAll(applied.lists, applied.items)
+        try {
+            val now = clock()
+            val applied = TodoTransfer.apply(repository.currentSnapshot(), imported, mode, now)
+            repository.replaceAll(applied.lists, applied.items)
 
-        // 整文件快照同步没有增量概念：不主动推一次，导入的数据就只留在本机。
-        // replaceAll 会临时关闭仓库的变更回调，所以这里必须显式触发。
-        syncEngine.scheduleSync(delayMillis = 0)
+            // 整文件快照同步没有增量概念：不主动推一次，导入的数据就只留在本机。
+            // replaceAll 会临时关闭仓库的变更回调，所以这里必须显式触发。
+            syncEngine.scheduleSync(delayMillis = 0)
 
-        val stats = TodoTransfer.stats(imported)
-        val label = if (mode == ImportMode.MERGE) "已合并导入" else "已覆盖导入"
-        _state.value = TransferUiState(
-            message = "$label ${stats.lists} 个清单、${stats.items} 条待办，正在同步到其它设备…",
-        )
+            val stats = TodoTransfer.stats(imported)
+            val label = if (mode == ImportMode.MERGE) "已合并导入" else "已覆盖导入"
+            _state.value = TransferUiState(
+                message = "$label ${stats.lists} 个清单、${stats.items} 条待办，正在同步到其它设备…",
+            )
+        } catch (e: Exception) {
+            // 写库失败：提示错误并收起确认框（pending 已置空），不留半死状态
+            _state.value = TransferUiState(message = "导入失败：${e.message ?: e::class.simpleName}", isError = true)
+        }
     }
 
     /** 关掉确认框，丢弃已解析的备份。 */

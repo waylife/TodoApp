@@ -150,6 +150,58 @@ class TransferViewModelTest {
         assertNotNull(vm.state.value.message)
     }
 
+    @Test
+    fun `导出流程抛异常时复位 busy 并提示`() = runTest {
+        val db = TestDb()
+        val (vm, _) = db.newViewModel(eagerTestScope())
+        val broken = object : DocumentTransfer {
+            override suspend fun saveJson(suggestedName: String, content: String): TransferOutcome<String> =
+                throw IllegalStateException("保存器崩溃")
+
+            override suspend fun openJson(): TransferOutcome<PickedDocument> =
+                throw IllegalStateException("选择器崩溃")
+        }
+
+        vm.export(broken)
+
+        assertFalse(vm.state.value.busy, "异常路径必须复位 busy，否则导出按钮永久禁用")
+        assertTrue(vm.state.value.isError)
+        assertEquals("导出失败：保存器崩溃", vm.state.value.message)
+
+        vm.pickImportFile(broken)
+
+        assertFalse(vm.state.value.busy, "读取异常路径同样必须复位 busy")
+        assertEquals("读取失败：选择器崩溃", vm.state.value.message)
+    }
+
+    @Test
+    fun `确认导入抛异常时提示错误且收起确认框`() = runTest {
+        val db = TestDb()
+        val settings = SettingsStore(
+            PreferencesSettings(Preferences.userRoot().node("/com/todoapp/test/tvm-${System.nanoTime()}")),
+        )
+        val engine = SyncEngine(db.repository, settings, HttpClient(CIO), eagerTestScope())
+        var clockBoom = false
+        val vm = TransferViewModel(
+            db.repository,
+            engine,
+            eagerTestScope(),
+            clock = { if (clockBoom) throw IllegalStateException("时钟崩溃") else 5_000_000L },
+        )
+        val backup = RemoteSnapshot(
+            lists = listOf(TodoList(id = "bl", name = "备份清单", createdAt = 0, updatedAt = 1)),
+        )
+
+        vm.previewBackup("backup.json", TodoTransfer.encode(backup))
+        assertNotNull(vm.state.value.pending)
+        clockBoom = true
+        vm.confirmImport(ImportMode.MERGE)
+
+        assertTrue(vm.state.value.isError)
+        assertEquals("导入失败：时钟崩溃", vm.state.value.message)
+        assertNull(vm.state.value.pending, "失败后应收起确认框，避免用户对着已失效的预览重复确认")
+    }
+
     // ---------- 解析与预览 ----------
 
     @Test

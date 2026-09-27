@@ -10,6 +10,7 @@ import com.todoapp.testing.TestDb
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import java.util.prefs.Preferences
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -153,6 +154,47 @@ class SettingsViewModelTest {
 
         assertFalse(vm.uiState.value.testSuccess)
         assertEquals("拒绝连接", vm.uiState.value.testResult)
+    }
+
+    @Test
+    fun `测试连接 测试器抛异常时复位 testing 并提示`() = runBlocking {
+        val db = TestDb()
+        val store = newStore()
+        val engine = SyncEngine(db.repository, store, HttpClient(CIO), scope)
+        val vm = SettingsViewModel(store, engine, HttpClient(CIO), scope) {
+            throw IllegalStateException("测试器内部崩溃")
+        }
+
+        vm.testConnection("https://good.example.com", "u", "p", remoteDir = "ToDoApp")
+        withTimeout(5_000) { vm.uiState.first { it.testResult != null } }
+
+        assertFalse(vm.uiState.value.testing, "异常路径必须复位 testing，否则测试按钮永久禁用")
+        assertFalse(vm.uiState.value.testSuccess)
+        assertEquals("测试器内部崩溃", vm.uiState.value.testResult)
+    }
+
+    @Test
+    fun `测试连接 进行中忽略重复触发`() = runBlocking {
+        val db = TestDb()
+        val store = newStore()
+        val engine = SyncEngine(db.repository, store, HttpClient(CIO), scope)
+        val gate = CompletableDeferred<Unit>()
+        var testerCalls = 0
+        val vm = SettingsViewModel(store, engine, HttpClient(CIO), scope) {
+            testerCalls++
+            gate.await() // 让第一次测试一直挂在途状态
+            Result.success("连接成功，目录可用")
+        }
+
+        vm.testConnection("https://good.example.com", "u", "p", remoteDir = "ToDoApp")
+        vm.testConnection("https://good.example.com", "u", "p", remoteDir = "ToDoApp") // 在途期间重复点击
+
+        gate.complete(Unit)
+        withTimeout(5_000) { vm.uiState.first { it.testResult != null } }
+
+        assertEquals(1, testerCalls, "上一次测试未结束时不应并发发起第二次")
+        assertTrue(vm.uiState.value.testSuccess)
+        assertFalse(vm.uiState.value.testing)
     }
 
     // ---------- lastSyncAt 与删除远端 ----------

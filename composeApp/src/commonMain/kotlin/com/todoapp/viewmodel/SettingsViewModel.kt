@@ -91,21 +91,33 @@ class SettingsViewModel(
             _testResult.value = false to "请先填写服务器地址"
             return
         }
+        // 在途守卫：连接测试进行中忽略重复触发。UI 会禁用按钮，但按钮禁用依赖重组生效，
+        // 快速双击仍可能并发发起两次测试，后完成者会覆盖先完成者的结果。
+        if (_testing.value) return
         _testing.value = true
         _testResult.value = null
         appScope.launch {
-            val config = WebDavConfig(
-                serverUrl = serverUrl.trim().trimEnd('/'),
-                username = username.trim(),
-                password = password,
-                remoteDir = remoteDir.trim().trim('/').ifEmpty { WebDavConfig.DEFAULT_REMOTE_DIR },
-            )
-            val result = connectionTester(config)
-            _testing.value = false
-            _testResult.value = result.fold(
-                onSuccess = { true to it },
-                onFailure = { false to (it.message ?: "连接失败") },
-            )
+            try {
+                val config = WebDavConfig(
+                    serverUrl = serverUrl.trim().trimEnd('/'),
+                    username = username.trim(),
+                    password = password,
+                    remoteDir = remoteDir.trim().trim('/').ifEmpty { WebDavConfig.DEFAULT_REMOTE_DIR },
+                )
+                val result = connectionTester(config)
+                _testResult.value = result.fold(
+                    onSuccess = { true to it },
+                    onFailure = { false to (it.message ?: "连接失败") },
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // connectionTester 的契约是返回 Result，但异常路径不能漏：
+                // 否则 _testing 永久为 true，测试按钮永久禁用
+                _testResult.value = false to (e.message ?: "连接失败")
+            } finally {
+                _testing.value = false
+            }
         }
     }
 
