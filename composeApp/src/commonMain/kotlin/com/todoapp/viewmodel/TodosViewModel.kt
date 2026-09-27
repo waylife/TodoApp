@@ -66,11 +66,14 @@ class TodosViewModel(
         _searchQuery.value = query
     }
 
-    /** 底部输入栏添加待办；没有清单时自动建「默认」清单。 */
+    /** 底部输入栏添加待办；没有可用清单时自动建「默认」清单。 */
     fun addTodo(title: String) {
         if (title.isBlank()) return
+        val aliveLists = repository.lists.value.filter { it.deletedAt == null }
         val targetListId = _selectedListId.value
-            ?: repository.lists.value.firstOrNull { it.deletedAt == null }?.id
+            // 选中清单可能已被其它设备删除并经同步墓碑化，此时回退到存活清单
+            ?.takeIf { id -> aliveLists.any { it.id == id } }
+            ?: aliveLists.firstOrNull()?.id
             ?: repository.addList("默认").id
         repository.addItem(targetListId, title)
     }
