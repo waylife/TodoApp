@@ -106,27 +106,33 @@ class TransferViewModel(
         _state.value = parse(fileName, content)
     }
 
-    /** 用户确认导入。[mode] 决定合并还是覆盖。 */
+    /** 用户确认导入。[mode] 决定合并还是覆盖。整库写入放到后台协程，避免大数据量时卡住界面线程。 */
     fun confirmImport(mode: ImportMode) {
         val imported = pendingSnapshot ?: return
         pendingSnapshot = null
-        try {
-            val now = clock()
-            val applied = TodoTransfer.apply(repository.currentSnapshot(), imported, mode, now)
-            repository.replaceAll(applied.lists, applied.items)
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(busy = true, message = null)
+        scope.launch {
+            try {
+                val now = clock()
+                val applied = TodoTransfer.apply(repository.currentSnapshot(), imported, mode, now)
+                repository.replaceAll(applied.lists, applied.items)
 
-            // 整文件快照同步没有增量概念：不主动推一次，导入的数据就只留在本机。
-            // replaceAll 会临时关闭仓库的变更回调，所以这里必须显式触发。
-            syncEngine.scheduleSync(delayMillis = 0)
+                // 整文件快照同步没有增量概念：不主动推一次，导入的数据就只留在本机。
+                // replaceAll 会临时关闭仓库的变更回调，所以这里必须显式触发。
+                syncEngine.scheduleSync(delayMillis = 0)
 
-            val stats = TodoTransfer.stats(imported)
-            val label = if (mode == ImportMode.MERGE) "已合并导入" else "已覆盖导入"
-            _state.value = TransferUiState(
-                message = "$label ${stats.lists} 个清单、${stats.items} 条待办，正在同步到其它设备…",
-            )
-        } catch (e: Exception) {
-            // 写库失败：提示错误并收起确认框（pending 已置空），不留半死状态
-            _state.value = TransferUiState(message = "导入失败：${e.message ?: e::class.simpleName}", isError = true)
+                val stats = TodoTransfer.stats(imported)
+                val label = if (mode == ImportMode.MERGE) "已合并导入" else "已覆盖导入"
+                _state.value = TransferUiState(
+                    message = "$label ${stats.lists} 个清单、${stats.items} 条待办，正在同步到其它设备…",
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 写库失败：提示错误并复位 busy，确认框已经收起（pending 已置空）
+                _state.value = TransferUiState(message = "导入失败：${e.message ?: e::class.simpleName}", isError = true)
+            }
         }
     }
 
