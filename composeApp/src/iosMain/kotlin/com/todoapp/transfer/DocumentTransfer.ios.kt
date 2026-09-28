@@ -1,6 +1,7 @@
 package com.todoapp.transfer
 
 import androidx.compose.runtime.Composable
+import java.io.ByteArrayOutputStream
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
@@ -8,6 +9,7 @@ import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.CompletableDeferred
 import platform.Foundation.NSData
+import platform.Foundation.NSFileHandle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSFileSize
 import platform.Foundation.NSNumber
@@ -19,6 +21,9 @@ import platform.UIKit.UIApplication
 import platform.UIKit.UIDocumentPickerDelegateProtocol
 import platform.UIKit.UIDocumentPickerViewController
 import platform.UIKit.UIViewController
+import platform.UIKit.UIWindow
+import platform.UIKit.UIWindowScene
+import platform.UIKit.UISceneActivationStateForegroundActive
 import platform.UniformTypeIdentifiers.UTTypeJSON
 import platform.darwin.NSObject
 import platform.darwin.dispatch_async
@@ -59,10 +64,19 @@ private class IosDocumentTransfer : DocumentTransfer {
                 pendingSave = null
             },
         )
-        present(picker)
+        present(picker) {
+            // 弹不出去（拿不到 keyWindow 等）时立刻以「取消」收场，等待方不能永久挂起
+            pendingSave?.complete(null)
+            pendingSave = null
+        }
 
-        val destination = deferred.await() ?: return TransferOutcome.Cancelled
-        return TransferOutcome.Ok(destination.lastPathComponent ?: suggestedName)
+        try {
+            val destination = deferred.await() ?: return TransferOutcome.Cancelled
+            return TransferOutcome.Ok(destination.lastPathComponent ?: suggestedName)
+        } finally {
+            // asCopy 导出在回调时已完成拷贝，临时源文件不再需要，及时清理避免堆积
+            NSFileManager.defaultManager.removeItemAtPath(path, error = null)
+        }
     }
 
     override suspend fun openJson(): TransferOutcome<PickedDocument> {
@@ -78,16 +92,26 @@ private class IosDocumentTransfer : DocumentTransfer {
                 pendingOpen = null
             },
         )
-        present(picker)
+        present(picker) {
+            pendingOpen?.complete(null)
+            pendingOpen = null
+        }
 
         val url = deferred.await() ?: return TransferOutcome.Cancelled
         val path = url.path ?: return TransferOutcome.Failed("无法定位所选文件")
-        // 先看大小再读：contentsAtPath 会把整个文件拉进内存，误选大文件会 OOM
+        // 先看大小快速拒绝；属性取不到时改用受限读取兜底——
+        // 无论哪种情况都绝不把未知大小的文件整段拉进内存
         val size = fileSize(path)
         if (size != null && size > TodoTransfer.MAX_BACKUP_BYTES) {
             return TransferOutcome.Failed(TodoTransfer.tooLargeMessage())
         }
-        val text = readText(path) ?: return TransferOutcome.Failed("无法读取所选文件")
+        val text = try {
+            readBounded(path, TodoTransfer.MAX_BACKUP_BYTES).decodeToString()
+        } catch (_: FileTooLargeException) {
+            return TransferOutcome.Failed(TodoTransfer.tooLargeMessage())
+        } catch (_: Exception) {
+            return TransferOutcome.Failed("无法读取所选文件")
+        }
         return TransferOutcome.Ok(PickedDocument(url.lastPathComponent ?: "备份文件", text))
     }
 
@@ -109,19 +133,34 @@ private class IosDocumentTransfer : DocumentTransfer {
         return deferred
     }
 
-    /** 选择器必须从主线程弹出，且要挂在当前最上层的控制器上（否则在已弹出面板时会被丢弃）。 */
-    private fun present(picker: UIViewController) {
+    /** 选择器必须从主线程弹出，且要挂在当前最上层的控制器上（否则在已弹出面板时会被丢弃）。
+     *  弹出失败时调用 [onPresentationFailed]——通常意味着拿不到窗口，等待方必须立刻收场。 */
+    private fun present(picker: UIViewController, onPresentationFailed: () -> Unit) {
         dispatch_async(dispatch_get_main_queue()) {
-            topViewController()?.presentViewController(picker, animated = true, completion = null)
+            val top = topViewController()
+            if (top == null) {
+                onPresentationFailed()
+            } else {
+                top.presentViewController(picker, animated = true, completion = null)
+            }
         }
     }
 
     private fun topViewController(): UIViewController? {
-        var controller = UIApplication.sharedApplication.keyWindow?.rootViewController
+        var controller = keyWindow()?.rootViewController
         while (controller?.presentedViewController != null) {
             controller = controller.presentedViewController
         }
         return controller
+    }
+
+    /** iOS 13 起 keyWindow 已废弃且多 scene 下可能为 nil：优先从激活中的 scene 取 key window。 */
+    private fun keyWindow(): UIWindow? {
+        val activeScene = UIApplication.sharedApplication.connectedScenes
+            .filterIsInstance<UIWindowScene>()
+            .firstOrNull { it.activationState == UISceneActivationStateForegroundActive }
+        return activeScene?.windows?.firstOrNull { it.isKeyWindow }
+            ?: UIApplication.sharedApplication.keyWindow
     }
 
     private fun attachDelegate(
@@ -136,16 +175,41 @@ private class IosDocumentTransfer : DocumentTransfer {
             attributes = null,
         )
 
-    private fun readText(path: String): String? =
-        NSFileManager.defaultManager.contentsAtPath(path)?.toByteArray()?.decodeToString()
+    /** 读到的字节数超过 [maxBytes] 时抛 [FileTooLargeException]，与「打不开文件」相区分。 */
+    private class FileTooLargeException : Exception()
 
-    /** 文件字节数；取不到属性时返回 null（此时不拦截，交给读取本身去失败）。 */
+    /**
+     * 边读边计数的受限读取。contentsAtPath 会把整个文件拉进内存，而选择器允许选中任意
+     * 文件——即便大小属性读取失败（此时无法预检），也必须在超限的第一时间停下而不是 OOM。
+     */
+    private fun readBounded(path: String, maxBytes: Long): ByteArray {
+        val handle = NSFileHandle.fileHandleForReadingAtPath(path)
+            ?: throw IllegalStateException("无法打开文件")
+        try {
+            val buffer = ByteArrayOutputStream()
+            while (true) {
+                val chunk = handle.readDataOfLength(READ_CHUNK_BYTES.toULong()) ?: break
+                val bytes = chunk.toByteArray()
+                if (bytes.isEmpty()) break
+                buffer.write(bytes)
+                if (buffer.size() > maxBytes) throw FileTooLargeException()
+            }
+            return buffer.toByteArray()
+        } finally {
+            handle.closeFile()
+        }
+    }
+
+    /** 文件字节数；取不到属性时返回 null（此时由 [readBounded] 的上限兜底）。 */
     private fun fileSize(path: String): Long? {
         val attributes = NSFileManager.defaultManager.attributesOfItemAtPath(path, error = null)
             ?: return null
         return (attributes[NSFileSize] as? NSNumber)?.longLongValue
     }
 }
+
+/** 受限读取的分块大小。 */
+private const val READ_CHUNK_BYTES = 64 * 1024
 
 private class PickerDelegate(
     private val onPicked: (List<*>) -> Unit,
