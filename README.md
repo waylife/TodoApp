@@ -33,7 +33,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 191 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 195 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -112,7 +112,7 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 ### 一键运行（日常入口）
 
 ```bash
-scripts/run_tests.sh                        # 全量跑（191 个用例，JVM 上）
+scripts/run_tests.sh                        # 全量跑（195 个用例，JVM 上）
 scripts/run_tests.sh --filter SyncMerge     # 只跑名字匹配的测试类
 scripts/run_tests.sh --filter "TodosViewModel 搜索"
 scripts/run_tests.sh --rerun                # 忽略 up-to-date 缓存强制重跑
@@ -146,7 +146,7 @@ scripts/run_tests.sh --help
 - **纯函数优先**：合并（`SyncMerge`）、分组（`PlanGrouper`）、备份语义（`TodoTransfer`）
   都是无副作用的 object，单测不需要任何夹具。
 
-### 用例分布（191 个）
+### 用例分布（195 个）
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
@@ -166,6 +166,7 @@ scripts/run_tests.sh --help
 | `SettingsViewModelTest` | 8 | 设置页：保存配置归一化并立即同步、非法地址置 NotConfigured、连接测试（空地址本地拦截 + 注入测试器回显、**测试器抛异常时复位 testing**、**在途时忽略重复触发**）、lastSyncAt 展示与清空后归零、远端路径拼接 |
 | `PlanViewModelTest` | 6 | 计划页：范围切换、逾期置顶且不重复出现在日期分组、已完成/已删除/无日期过滤、清单名映射（today 注入固定日期） |
 | `SettingsStoreTest` | 6 | 设置存储：默认值、保存归一化、空目录回退默认、新实例从持久层读回、lastSyncAt |
+| `WebDavClientTest` | 4 | 客户端上传前置条件：If-Match 匹配现有 ETag、GET 无 ETag 时退化为 `If-Match: *`、文件在 GET 与 PUT 之间被删时拒绝重建、409 重试保留 isNew 前置条件且 412 走冲突重试 |
 | `DesktopDbMigrationTest` | 3 | 桌面端建库/迁移：全新库建表并写入 `PRAGMA user_version`、旧库重开数据保留且版本号补齐、更高版本号的库重开时版本号只升不降 |
 | `EditSessionTest` | 5 | 编辑会话：打开/保存（更新并关闭）/删除并关闭、条目被外部删除后面板显示为空 |
 | `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
