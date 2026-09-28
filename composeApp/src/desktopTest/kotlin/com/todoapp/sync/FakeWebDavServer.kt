@@ -42,6 +42,12 @@ class FakeWebDavServer {
     var mkcolCount = 0
         private set
 
+    /** 模拟「GET 不返回 ETag」的服务器：客户端拿不到乐观锁标签，应退化为 If-Match: *。 */
+    var omitGetEtag = false
+
+    /** 让下一次 PUT 返回 409（个别服务器在目录缺失时如此），用于测试 409 重试路径。 */
+    var failNextPutWith409 = false
+
     /**
      * 模拟「无视 Accept-Encoding、一律以压缩表示返回 ETag」的服务器或代理。
      * Apache mod_deflate 会在压缩响应上把 ETag 改写成 `"...-gzip"`，而 PUT 上传的是未压缩实体，
@@ -85,6 +91,11 @@ class FakeWebDavServer {
         files[path] = Entry(content, "W/\"etag-$etagCounter\"")
     }
 
+    /** 测试移除远端文件（模拟 GET 与 PUT 之间被其它客户端删除）。 */
+    fun removeFile(path: String) {
+        files.remove(path)
+    }
+
     private suspend fun RoutingContext.handleRequest() {
         val rawPath = call.request.path()
         val path = rawPath.trim('/')
@@ -112,20 +123,33 @@ class FakeWebDavServer {
                 if (entry == null) {
                     call.respondText("", status = HttpStatusCode.NotFound)
                 } else {
-                    call.response.header("ETag", if (forceGzipEtag) gzipForm(entry.etag) else entry.etag)
+                    if (!omitGetEtag) {
+                        call.response.header("ETag", if (forceGzipEtag) gzipForm(entry.etag) else entry.etag)
+                    }
                     call.respondText(entry.content)
                 }
             }
 
             "PUT" -> {
                 putCount += 1
+                if (failNextPutWith409) {
+                    failNextPutWith409 = false
+                    call.respondText("", status = HttpStatusCode.Conflict)
+                    return
+                }
                 val body = call.receiveText()
                 val ifMatch = call.request.headers["If-Match"]
                 val ifNoneMatch = call.request.headers["If-None-Match"]
                 val existing = files[path]
+                // RFC 7232：If-Match 做强比较，`*` 表示「仅当资源仍存在」时放行
+                val ifMatchFails = when {
+                    ifMatch == null -> false
+                    ifMatch == "*" -> existing == null
+                    existing == null -> true
+                    else -> strongForm(existing.etag) != ifMatch
+                }
                 when {
-                    // 弱校验值参与 If-Match 时永远不匹配（RFC 7232 §3.1 强比较）
-                    ifMatch != null && (existing == null || strongForm(existing.etag) != ifMatch) ->
+                    ifMatchFails ->
                         call.respondText("", status = HttpStatusCode.PreconditionFailed)
 
                     ifNoneMatch == "*" && existing != null ->

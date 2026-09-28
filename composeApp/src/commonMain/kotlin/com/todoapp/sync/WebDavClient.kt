@@ -76,30 +76,20 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
 
     /** 上传快照。isNew 时用 If-None-Match: * 防止覆盖别人的新文件；否则用 If-Match。 */
     suspend fun uploadFile(content: String, etag: String?, isNew: Boolean) {
-        val response: HttpResponse = httpClient.put(fileUrl()) {
-            header(HttpHeaders.Authorization, authHeader())
-            if (isNew) {
-                header(HttpHeaders.IfNoneMatch, "*")
-            } else {
-                strongEtag(etag)?.let { header(HttpHeaders.IfMatch, it) }
-            }
-            contentType(ContentType.Application.Json)
-            setBody(content)
-        }
+        val response = putWithPrecondition(content, etag, isNew)
         when {
             response.status.isSuccess() -> Unit
             response.status == HttpStatusCode.PreconditionFailed -> throw WebDavConflictException()
             response.status == HttpStatusCode.Conflict -> {
-                // 个别服务器在目录缺失时返回 409：建目录后重试一次
+                // 个别服务器在目录缺失时返回 409：建目录后重试一次，前置条件原样保留。
+                // 重试仍可能 412（目录补建期间文件被并发创建/修改）：必须抛冲突异常，
+                // 让同步引擎重走「下载→合并→上传」，而不是把冲突当普通失败中断同步。
                 ensureRemoteDir()
-                val retry: HttpResponse = httpClient.put(fileUrl()) {
-                    header(HttpHeaders.Authorization, authHeader())
-                    strongEtag(etag)?.let { header(HttpHeaders.IfMatch, it) }
-                    contentType(ContentType.Application.Json)
-                    setBody(content)
-                }
-                if (!retry.status.isSuccess()) {
-                    throw WebDavException("上传失败：HTTP ${retry.status.value}", retry.status.value)
+                val retry = putWithPrecondition(content, etag, isNew)
+                when {
+                    retry.status.isSuccess() -> Unit
+                    retry.status == HttpStatusCode.PreconditionFailed -> throw WebDavConflictException()
+                    else -> throw WebDavException("上传失败：HTTP ${retry.status.value}", retry.status.value)
                 }
             }
             response.status == HttpStatusCode.Unauthorized ->
@@ -107,6 +97,24 @@ class WebDavClient(private val httpClient: HttpClient, private val config: WebDa
             else -> throw WebDavException("上传失败：HTTP ${response.status.value}", response.status.value)
         }
     }
+
+    /**
+     * 组装带前置条件的 PUT，三处上传（首次/覆盖/409 重试）共用，避免各写一份造成语义漂移。
+     * 服务器 GET 不返回 ETag 时退化为 `If-Match: *`（「资源仍存在」即放行）：拿不到具体
+     * 标签就没有真正的乐观锁，但仍能把「文件已被删除/重建」的并发变成可检测的 412，
+     * 而不是静默覆盖；对根本不认识 If-Match 的极简服务器则等价于原来的裸 PUT。
+     */
+    private suspend fun putWithPrecondition(content: String, etag: String?, isNew: Boolean): HttpResponse =
+        httpClient.put(fileUrl()) {
+            header(HttpHeaders.Authorization, authHeader())
+            if (isNew) {
+                header(HttpHeaders.IfNoneMatch, "*")
+            } else {
+                header(HttpHeaders.IfMatch, etag?.let(::strongEtag) ?: "*")
+            }
+            contentType(ContentType.Application.Json)
+            setBody(content)
+        }
 
     /**
      * 归一化 ETag 供 If-Match 使用，剥掉两类会让服务器必然返回 412 的修饰：
