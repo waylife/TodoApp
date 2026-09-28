@@ -25,22 +25,29 @@ import kotlinx.coroutines.withContext
  * 也不存在残留状态。
  */
 private object PendingPicker {
-    var save: CompletableDeferred<Uri?>? = null
-    var open: CompletableDeferred<Uri?>? = null
+    /**
+     * 每次发起选择对应一个等待方，SAF 的结果回调按发起顺序一一抵达，
+     * 因此用 FIFO 出队保证「第 N 个回调完成第 N 个等待方」的身份对应。
+     * 单槽位实现有串台竞态：若第 2 次发起先把槽位换成新等待方，晚到的
+     * 第 1 个回调会把旧 URI 完成给新等待方——「选 A 却写进了 B 挑的文件」。
+     */
+    private val save = ArrayDeque<CompletableDeferred<Uri?>>()
+    private val open = ArrayDeque<CompletableDeferred<Uri?>>()
 
-    /** 换上新的等待方，并让上一个永远等不到结果的等待方立刻以「已取消」结束。 */
-    fun replaceSave(deferred: CompletableDeferred<Uri?>): CompletableDeferred<Uri?> {
-        val previous = save
-        save = deferred
-        previous?.complete(null)
-        return deferred
+    fun enqueueSave(deferred: CompletableDeferred<Uri?>) {
+        save.addLast(deferred)
     }
 
-    fun replaceOpen(deferred: CompletableDeferred<Uri?>): CompletableDeferred<Uri?> {
-        val previous = open
-        open = deferred
-        previous?.complete(null)
-        return deferred
+    fun completeSave(uri: Uri?) {
+        save.removeFirstOrNull()?.complete(uri)
+    }
+
+    fun enqueueOpen(deferred: CompletableDeferred<Uri?>) {
+        open.addLast(deferred)
+    }
+
+    fun completeOpen(uri: Uri?) {
+        open.removeFirstOrNull()?.complete(uri)
     }
 }
 
@@ -58,20 +65,19 @@ actual fun rememberDocumentTransfer(): DocumentTransfer {
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
-        PendingPicker.save?.complete(uri)
-        PendingPicker.save = null
+        PendingPicker.completeSave(uri)
     }
     val openLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        PendingPicker.open?.complete(uri)
-        PendingPicker.open = null
+        PendingPicker.completeOpen(uri)
     }
 
     return object : DocumentTransfer {
 
         override suspend fun saveJson(suggestedName: String, content: String): TransferOutcome<String> {
-            val deferred = PendingPicker.replaceSave(CompletableDeferred())
+            val deferred = CompletableDeferred<Uri?>()
+            PendingPicker.enqueueSave(deferred)
             saveLauncher.launch(suggestedName)
             val uri = deferred.await() ?: return TransferOutcome.Cancelled
             return withContext(Dispatchers.IO) {
@@ -88,7 +94,8 @@ actual fun rememberDocumentTransfer(): DocumentTransfer {
         }
 
         override suspend fun openJson(): TransferOutcome<PickedDocument> {
-            val deferred = PendingPicker.replaceOpen(CompletableDeferred())
+            val deferred = CompletableDeferred<Uri?>()
+            PendingPicker.enqueueOpen(deferred)
             // 部分文件管理器把 .json 报成 application/octet-stream，带上通配避免用户根本选不中
             openLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
             val uri = deferred.await() ?: return TransferOutcome.Cancelled
