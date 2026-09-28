@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.stateIn
 /** 清单页状态：选中清单、搜索词、过滤后的待办。 */
 data class TodosUiState(
     val lists: List<TodoList> = emptyList(),
+    /** 清单 id → 名称，供行内角标 O(1) 查询（预计算，避免每行线性扫描）。 */
+    val listNames: Map<String, String> = emptyMap(),
     val selectedListId: String? = null, // null = 全部
     val searchQuery: String = "",
     val activeItems: List<TodoItem> = emptyList(),
@@ -51,6 +53,7 @@ class TodosViewModel(
         val done = scoped.filter { it.done }.sortedByDescending { it.updatedAt }
         TodosUiState(
             lists = aliveLists,
+            listNames = aliveLists.associate { it.id to it.name },
             selectedListId = selectedListId,
             searchQuery = query,
             activeItems = active,

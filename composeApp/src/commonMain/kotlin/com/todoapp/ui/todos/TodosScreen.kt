@@ -153,7 +153,7 @@ fun TodosScreen(
                     items(state.activeItems, key = { it.id }) { item ->
                         TodoRow(
                             item = item,
-                            listName = if (state.selectedListId == null) state.lists.firstOrNull { it.id == item.listId }?.name else null,
+                            listName = if (state.selectedListId == null) state.listNames[item.listId] else null,
                             onToggle = { viewModel.toggleDone(item) },
                             onClick = { editSession.open(item.id) },
                         )
@@ -166,7 +166,7 @@ fun TodosScreen(
                     items(state.doneItems, key = { "done-" + it.id }) { item ->
                         TodoRow(
                             item = item,
-                            listName = if (state.selectedListId == null) state.lists.firstOrNull { it.id == item.listId }?.name else null,
+                            listName = if (state.selectedListId == null) state.listNames[item.listId] else null,
                             onToggle = { viewModel.toggleDone(item) },
                             onClick = { editSession.open(item.id) },
                         )

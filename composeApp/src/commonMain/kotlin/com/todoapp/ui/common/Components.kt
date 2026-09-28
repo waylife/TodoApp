@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -104,7 +105,8 @@ fun TodoRow(
                 }
                 if (showDueDate && item.dueAt != null) {
                     val due = Dates.toLocalDate(item.dueAt)
-                    val today = Dates.today()
+                    // 每个条目位置只在进入组合时取一次系统时钟，重组时复用
+                    val today = remember { Dates.today() }
                     val overdue = !item.done && due < today
                     Text(
                         text = "${Dates.relativeDate(due, today)}${overduePrefix(overdue)}",

@@ -147,9 +147,11 @@ private fun AppNav(container: AppContainer, initialTab: String) {
     }
 
     // 编辑面板挂在根部，两个页面共用
+    val rawLists by container.repository.lists.collectAsState()
     EditTodoSheet(
         editingItem = editingItem,
-        lists = container.repository.lists.collectAsState().value.filter { it.deletedAt == null }.sortedBy { it.sort },
+        // 过滤+排序只在清单数据真正变化时重算一次，避免随任意重组反复分配
+        lists = remember(rawLists) { rawLists.filter { it.deletedAt == null }.sortedBy { it.sort } },
         onSave = { id, title, note, dueAt, dueAtChanged, listId ->
             container.editSession.save(id, title, note, dueAt, dueAtChanged, listId)
         },
