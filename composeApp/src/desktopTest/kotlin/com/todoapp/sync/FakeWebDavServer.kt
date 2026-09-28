@@ -34,6 +34,14 @@ class FakeWebDavServer {
     var lastGetAcceptEncoding: String? = null
         private set
 
+    /** 累计收到的 PUT 次数（无论成败），用于断言「内容无变化时跳过上传」。 */
+    var putCount = 0
+        private set
+
+    /** 累计收到的 MKCOL 次数（无论成败），用于断言「目录只建一次」。 */
+    var mkcolCount = 0
+        private set
+
     /**
      * 模拟「无视 Accept-Encoding、一律以压缩表示返回 ETag」的服务器或代理。
      * Apache mod_deflate 会在压缩响应上把 ETag 改写成 `"...-gzip"`，而 PUT 上传的是未压缩实体，
@@ -82,6 +90,7 @@ class FakeWebDavServer {
         val path = rawPath.trim('/')
         when (call.request.httpMethod.value.uppercase()) {
             "MKCOL" -> {
+                mkcolCount += 1
                 if (createdDirs.contains(path) || files.containsKey(path)) {
                     // 真实服务器（Apache mod_dir）在集合已存在、URL 缺少结尾斜杠时返回 301，
                     // 带斜杠才返回 405；客户端两种都要按「目录已就绪」处理
@@ -109,6 +118,7 @@ class FakeWebDavServer {
             }
 
             "PUT" -> {
+                putCount += 1
                 val body = call.receiveText()
                 val ifMatch = call.request.headers["If-Match"]
                 val ifNoneMatch = call.request.headers["If-None-Match"]

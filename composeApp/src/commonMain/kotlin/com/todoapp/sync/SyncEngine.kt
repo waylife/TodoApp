@@ -58,6 +58,9 @@ class SyncEngine(
     private var debounceJob: Job? = null
     private var syncJob: Job? = null
 
+    /** 已成功建过远程目录的配置。配置未变时跳过逐级 MKCOL（例行同步每次省掉两个请求）。 */
+    private var dirEnsuredFor: WebDavConfig? = null
+
     init {
         repository.onLocalChange = { scheduleSync() }
     }
@@ -125,7 +128,10 @@ class SyncEngine(
         val client = WebDavClient(httpClient, config)
         _status.value = SyncStatus.Syncing
         try {
-            client.ensureRemoteDir()
+            if (dirEnsuredFor != config) {
+                client.ensureRemoteDir()
+                dirEnsuredFor = config
+            }
             var attempt = 0
             while (true) {
                 val (remoteJson, etag) = client.downloadFile()
@@ -139,13 +145,21 @@ class SyncEngine(
                     if (++attempt >= MAX_SYNC_ATTEMPTS) throw WebDavException("同步期间数据持续变化，请稍后重试")
                     continue
                 }
-                repository.replaceAll(merged.lists, merged.items)
-                // 写库后检测：replaceAll 执行期间恰好落库、未被事务清掉的编辑，
-                // 借下一轮重新快照并入合并结果并补推（onLocalChange 在写库期间被临时关闭）
-                if (repository.changeVersion != versionBefore) {
-                    if (++attempt >= MAX_SYNC_ATTEMPTS) throw WebDavException("同步期间数据持续变化，请稍后重试")
-                    continue
+                // 本地已是合并结果时跳过整体写库，无变化的例行同步就不必全删全插再全表重读
+                if (local.lists != merged.lists || local.items != merged.items) {
+                    repository.replaceAll(merged.lists, merged.items)
+                    // 写库后检测：replaceAll 执行期间恰好落库、未被事务清掉的编辑，
+                    // 借下一轮重新快照并入合并结果并补推（onLocalChange 在写库期间被临时关闭）
+                    if (repository.changeVersion != versionBefore) {
+                        if (++attempt >= MAX_SYNC_ATTEMPTS) throw WebDavException("同步期间数据持续变化，请稍后重试")
+                        continue
+                    }
                 }
+                // 合并结果的实体与远端一致时，远端文件无需更新：rev 恒递增会让
+                // 每次例行同步都重写整个远端文件，这里按内容短路掉那次 PUT。
+                // 仅对已存在的远端文件生效：首次同步必须真正上传，让用户在
+                // 服务器上看到 todoapp.json 作为「同步已就绪」的信号。
+                if (remoteJson != null && merged.lists == remote.lists && merged.items == remote.items) break
                 try {
                     client.uploadFile(json.encodeToString(merged), etag, isNew = remoteJson == null)
                     break

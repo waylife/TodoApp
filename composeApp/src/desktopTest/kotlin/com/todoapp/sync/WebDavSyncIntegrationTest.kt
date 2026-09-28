@@ -506,6 +506,34 @@ class WebDavSyncIntegrationTest {
         assertEquals(garbage, server.fileContent(PATH), "损坏的远端内容不得被合并结果覆写")
     }
 
+    @Test
+    fun `内容无变化时跳过上传与建目录，本地变化后恢复`() = runBlocking {
+        val (repoA, engineA, _) = newDevice("A")
+        val list = repoA.addList("工作")
+        repoA.addItem(list.id, "任务")
+        testTime += 100
+        sync(engineA)
+
+        // 无任何修改的例行同步：rev 虽然恒递增，但内容一致时不应重写远端文件，
+        // 也不再重复逐级 MKCOL
+        val putsBefore = server.putCount
+        val mkcolsBefore = server.mkcolCount
+        val contentBefore = server.fileContent(PATH)
+        sync(engineA)
+
+        assertEquals(putsBefore, server.putCount, "内容无变化时不应重写远端文件")
+        assertEquals(mkcolsBefore, server.mkcolCount, "目录已建过就不应再发 MKCOL")
+        assertEquals(contentBefore, server.fileContent(PATH), "远端内容应保持原样")
+
+        // 本地出现修改后必须恢复上传
+        repoA.addItem(list.id, "新事项")
+        testTime += 100
+        sync(engineA)
+
+        assertEquals(putsBefore + 1, server.putCount, "本地修改后应恢复上传")
+        assertTrue(server.fileContent(PATH)!!.contains("新事项"))
+    }
+
     private companion object {
         const val PATH = "dav/ToDoApp/todoapp.json"
     }
