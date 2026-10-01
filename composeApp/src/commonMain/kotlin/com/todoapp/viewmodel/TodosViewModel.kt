@@ -42,7 +42,9 @@ class TodosViewModel(
             .filter {
                 queryNorm.isEmpty() ||
                     it.title.contains(queryNorm, ignoreCase = true) ||
-                    it.note.contains(queryNorm, ignoreCase = true)
+                    it.note.contains(queryNorm, ignoreCase = true) ||
+                    it.description.contains(queryNorm, ignoreCase = true) ||
+                    it.progressUpdates.any { entry -> entry.text.contains(queryNorm, ignoreCase = true) }
             }
             .toList()
         val active = scoped.filter { !it.done }.sortedWith(

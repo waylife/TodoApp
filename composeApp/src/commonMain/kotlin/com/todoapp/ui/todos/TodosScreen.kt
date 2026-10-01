@@ -94,7 +94,7 @@ fun TodosScreen(
                     value = state.searchQuery,
                     onValueChange = viewModel::setSearchQuery,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    placeholder = { Text("搜索标题或备注") },
+                    placeholder = { Text("搜索标题、备注、描述或进度") },
                     singleLine = true,
                     trailingIcon = {
                         TextButton(onClick = {

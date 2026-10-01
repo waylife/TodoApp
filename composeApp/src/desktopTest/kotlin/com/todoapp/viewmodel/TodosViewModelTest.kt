@@ -131,6 +131,22 @@ class TodosViewModelTest {
     }
 
     @Test
+    fun `搜索命中任务描述与进度记录`() = runTest {
+        val db = TestDb()
+        val vm = TodosViewModel(db.repository, eagerTestScope())
+        val l = db.repository.addList("清单")
+        val withDesc = db.repository.addItem(l.id, "装修", description = "重点是厨房防水")
+        db.repository.addItem(l.id, "项目启动")
+        db.repository.addProgressEntry(withDesc.id, "水电改造完成")
+
+        vm.setSearchQuery("防水")
+        assertEquals(listOf("装修"), vm.uiState.value.activeItems.map { it.title }, "描述命中应保留")
+
+        vm.setSearchQuery("水电")
+        assertEquals(listOf("装修"), vm.uiState.value.activeItems.map { it.title }, "进度记录命中也应保留")
+    }
+
+    @Test
     fun `已删除与已完成待办不进入未完成分区`() = runTest {
         val db = TestDb()
         val vm = TodosViewModel(db.repository, eagerTestScope())
