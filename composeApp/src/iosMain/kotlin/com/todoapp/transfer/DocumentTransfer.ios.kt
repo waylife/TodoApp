@@ -1,7 +1,6 @@
 package com.todoapp.transfer
 
 import androidx.compose.runtime.Composable
-import java.io.ByteArrayOutputStream
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
@@ -15,8 +14,12 @@ import platform.Foundation.NSFileSize
 import platform.Foundation.NSNumber
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
-// NSData 的工厂方法在 Kotlin/Native 里是 companion 上的扩展函数，必须单独 import 才能用
+// Kotlin/Native 把 ObjC category 方法生成为扩展函数，必须单独 import 才能用
+// （fileHandleForReadingAtPath / readDataOfLength / closeFile / NSData.create 同理）
+import platform.Foundation.closeFile
 import platform.Foundation.create
+import platform.Foundation.fileHandleForReadingAtPath
+import platform.Foundation.readDataOfLength
 import platform.UIKit.UIApplication
 import platform.UIKit.UIDocumentPickerDelegateProtocol
 import platform.UIKit.UIDocumentPickerViewController
@@ -159,7 +162,9 @@ private class IosDocumentTransfer : DocumentTransfer {
         val activeScene = UIApplication.sharedApplication.connectedScenes
             .filterIsInstance<UIWindowScene>()
             .firstOrNull { it.activationState == UISceneActivationStateForegroundActive }
-        return activeScene?.windows?.firstOrNull { it.isKeyWindow }
+        // cinterop 里 windows 是 List<*>，先按类型筛出 UIWindow 再找 key window；
+        // isKeyWindow 在该 SDK 绑定下是方法而非属性
+        return activeScene?.windows?.filterIsInstance<UIWindow>()?.firstOrNull { it.isKeyWindow() }
             ?: UIApplication.sharedApplication.keyWindow
     }
 
@@ -186,15 +191,24 @@ private class IosDocumentTransfer : DocumentTransfer {
         val handle = NSFileHandle.fileHandleForReadingAtPath(path)
             ?: throw IllegalStateException("无法打开文件")
         try {
-            val buffer = ByteArrayOutputStream()
+            // Native 没有 ByteArrayOutputStream：分块攒下并随时计总量，超限立刻抛
+            val chunks = ArrayList<ByteArray>()
+            var total = 0
             while (true) {
                 val chunk = handle.readDataOfLength(READ_CHUNK_BYTES.toULong()) ?: break
                 val bytes = chunk.toByteArray()
                 if (bytes.isEmpty()) break
-                buffer.write(bytes)
-                if (buffer.size() > maxBytes) throw FileTooLargeException()
+                chunks += bytes
+                total += bytes.size
+                if (total > maxBytes) throw FileTooLargeException()
             }
-            return buffer.toByteArray()
+            val result = ByteArray(total)
+            var offset = 0
+            for (chunk in chunks) {
+                chunk.copyInto(result, offset)
+                offset += chunk.size
+            }
+            return result
         } finally {
             handle.closeFile()
         }
