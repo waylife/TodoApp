@@ -1,5 +1,6 @@
 package com.todoapp.transfer
 
+import com.todoapp.model.ProgressEntry
 import com.todoapp.model.RemoteSnapshot
 import com.todoapp.model.TodoItem
 import com.todoapp.model.TodoList
@@ -100,6 +101,38 @@ class TodoTransferTest {
         val text = """{"schemaVersion": 1, "rev": 3, "lists": [], "items": [], "futureField": {"a": 1}}"""
         val decoded = TodoTransfer.decode(text).getOrThrow()
         assertEquals(3, decoded.rev)
+    }
+
+    @Test
+    fun `v1 旧备份导入后新字段取默认值`() {
+        val text = """
+            {"schemaVersion": 1, "rev": 3, "savedAt": 0, "lists": [],
+             "items": [{"id": "a1", "listId": "l1", "title": "旧数据", "note": "",
+                        "done": false, "dueAt": null, "createdAt": 0, "updatedAt": 1, "deletedAt": null}]}
+        """.trimIndent()
+        val imported = TodoTransfer.decode(text).getOrThrow().items.single()
+        assertEquals("旧数据", imported.title)
+        assertEquals("", imported.description, "v1 备份没有描述字段，应解码为默认空串")
+        assertTrue(imported.progressUpdates.isEmpty(), "v1 备份没有进度字段，应解码为空时间线")
+    }
+
+    @Test
+    fun `描述与进度随快照往返无损`() {
+        val original = snap(
+            items = listOf(
+                item("i1", "写周报", 100).copy(
+                    description = "汇总各组进度与风险",
+                    progressUpdates = listOf(
+                        ProgressEntry(id = "p1", text = "完成调研", createdAt = 5),
+                        ProgressEntry(id = "p2", text = "初稿 80%", createdAt = 9),
+                    ),
+                ),
+            ),
+        )
+
+        val decoded = TodoTransfer.decode(TodoTransfer.encode(original)).getOrThrow()
+
+        assertEquals(original, decoded, "备份必须无损保留描述与进度时间线")
     }
 
     @Test

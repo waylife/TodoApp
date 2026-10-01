@@ -156,6 +156,86 @@ class TodoRepositoryTest {
     }
 
     @Test
+    fun `updateItem 更新任务描述且未传时保留`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲", description = "旧描述")
+        db.advance(10)
+
+        repo.updateItem(a.id, description = "新描述")
+
+        val after = repo.items.value.single { it.id == a.id }
+        assertEquals("新描述", after.description)
+        assertEquals(1_000_010L, after.updatedAt)
+
+        repo.updateItem(a.id, title = "改名")
+
+        assertEquals("新描述", repo.items.value.single { it.id == a.id }.description, "未传 description 时应保留原值")
+    }
+
+    // ---------- 进度更新 ----------
+
+    @Test
+    fun `addProgressEntry 追加带时间戳的进度记录`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        db.advance(10)
+
+        repo.addProgressEntry(a.id, "  开始调研  ")
+        db.advance(5)
+        repo.addProgressEntry(a.id, "完成方案")
+
+        val after = repo.items.value.single { it.id == a.id }
+        assertEquals(listOf("开始调研", "完成方案"), after.progressUpdates.map { it.text }, "进度按记录顺序追加")
+        assertEquals(1_000_010L, after.progressUpdates[0].createdAt)
+        assertEquals(1_000_015L, after.progressUpdates[1].createdAt)
+        assertEquals(1_000_015L, after.updatedAt, "进度变更应推进条目 updatedAt，随条目参与 LWW 合并")
+    }
+
+    @Test
+    fun `addProgressEntry 空白内容与不存在的条目无副作用`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+
+        repo.addProgressEntry(a.id, "   ")
+        repo.addProgressEntry("no-such-id", "x")
+
+        assertTrue(repo.items.value.single { it.id == a.id }.progressUpdates.isEmpty())
+    }
+
+    @Test
+    fun `removeProgressEntry 只删除目标记录`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        repo.addProgressEntry(a.id, "一")
+        db.advance(10)
+        repo.addProgressEntry(a.id, "二")
+        val stale = repo.items.value.single { it.id == a.id }.progressUpdates[0]
+
+        repo.removeProgressEntry(a.id, stale.id)
+        repo.removeProgressEntry(a.id, "no-such-entry")
+
+        assertEquals(listOf("二"), repo.items.value.single { it.id == a.id }.progressUpdates.map { it.text })
+    }
+
+    @Test
+    fun `进度记录的增删按用户变更处理`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        var changes = 0
+        repo.onLocalChange = { changes++ }
+        val before = repo.changeVersion
+
+        repo.addProgressEntry(a.id, "一")
+        repo.addProgressEntry(a.id, "   ") // 空白内容不落库
+        val entry = repo.items.value.single { it.id == a.id }.progressUpdates[0]
+        repo.removeProgressEntry(a.id, entry.id)
+
+        assertEquals(2, changes, "增、删各触发一次变更回调，空白内容不触发")
+        assertEquals(before + 2, repo.changeVersion, "变更计数应与回调一致，供同步引擎检测并发编辑")
+        assertTrue(repo.items.value.single { it.id == a.id }.progressUpdates.isEmpty())
+    }
+
+    @Test
     fun `setDone 更新完成状态与时间戳`() {
         val l = repo.addList("工作")
         val a = repo.addItem(l.id, "甲")
@@ -195,15 +275,16 @@ class TodoRepositoryTest {
     fun `数据落库后可由新仓库实例读回`() {
         val l1 = repo.addList("工作")
         val l2 = repo.addList("生活")
-        val a = repo.addItem(l1.id, "甲", dueAt = 42L, note = "备注")
+        val a = repo.addItem(l1.id, "甲", dueAt = 42L, note = "备注", description = "任务详情")
         repo.setDone(a.id, true)
+        repo.addProgressEntry(a.id, "进度一笔")
         db.advance(10)
         repo.deleteItem(repo.addItem(l2.id, "乙").id)
 
         val reopened = db.reopenedRepository()
 
         assertEquals(repo.lists.value, reopened.lists.value, "清单应从库中完整读回")
-        assertEquals(repo.items.value, reopened.items.value, "待办（含墓碑与完成标记）应从库中完整读回")
+        assertEquals(repo.items.value, reopened.items.value, "待办（含墓碑、描述与进度）应从库中完整读回")
     }
 
     // ---------- 变更回调 ----------

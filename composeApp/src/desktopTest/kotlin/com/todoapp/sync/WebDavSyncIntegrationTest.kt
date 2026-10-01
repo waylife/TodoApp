@@ -456,9 +456,9 @@ class WebDavSyncIntegrationTest {
         testTime += 100
         sync(engineA)
 
-        // 模拟未来版本的应用写入了 v2 快照，含本端不认识的数据
+        // 模拟未来版本的应用写入了 v3 快照，含本端不认识的数据
         val future = RemoteSnapshot(
-            schemaVersion = 2,
+            schemaVersion = 3,
             rev = 9,
             savedAt = testTime,
             lists = listOf(TodoList(id = "future-list", name = "新版清单", createdAt = 1, updatedAt = 1)),
@@ -478,7 +478,7 @@ class WebDavSyncIntegrationTest {
         assertEquals("本地事项", repoA.items.value.single { it.deletedAt == null }.title, "本机数据不得被整体替换")
         assertTrue(
             server.fileContent(PATH)!!.contains("新版待办"),
-            "远端 v2 快照不得被降级覆写",
+            "远端 v3 快照不得被降级覆写",
         )
     }
 

@@ -1,6 +1,7 @@
 package com.todoapp.data
 
 import com.todoapp.db.AppDatabase
+import com.todoapp.model.ProgressEntry
 import com.todoapp.model.RemoteSnapshot
 import com.todoapp.model.TodoItem
 import com.todoapp.model.TodoList
@@ -9,6 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import com.todoapp.db.TodoList as DbList
 import com.todoapp.db.TodoItem as DbItem
 
@@ -89,13 +92,14 @@ class TodoRepository(
 
     // ---------- 待办 ----------
 
-    fun addItem(listId: String, title: String, dueAt: Long? = null, note: String = ""): TodoItem {
+    fun addItem(listId: String, title: String, dueAt: Long? = null, note: String = "", description: String = ""): TodoItem {
         val now = clock()
         val item = TodoItem(
             id = newId(),
             listId = listId,
             title = title.trim(),
             note = note,
+            description = description,
             dueAt = dueAt,
             createdAt = now,
             updatedAt = now,
@@ -108,6 +112,7 @@ class TodoRepository(
         id: String,
         title: String? = null,
         note: String? = null,
+        description: String? = null,
         dueAt: Long? = null,
         dueAtChanged: Boolean = false,
         listId: String? = null,
@@ -117,11 +122,36 @@ class TodoRepository(
         val updated = current.copy(
             title = newTitle,
             note = note ?: current.note,
+            description = description ?: current.description,
             dueAt = if (dueAtChanged) dueAt else current.dueAt,
             listId = listId ?: current.listId,
             updatedAt = clock(),
         )
         persistItem(updated)
+    }
+
+    /**
+     * 追加一条进度更新。进度时间线整体属于条目、随条目按 updatedAt 做 LWW 合并，
+     * 因此这里只需要递增条目的 updatedAt。
+     */
+    fun addProgressEntry(id: String, text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val current = _items.value.firstOrNull { it.id == id } ?: return
+        val entry = ProgressEntry(id = newId(), text = trimmed, createdAt = clock())
+        persistItem(current.copy(progressUpdates = current.progressUpdates + entry, updatedAt = clock()))
+    }
+
+    /** 删除一条进度更新（记错内容时撤回）。 */
+    fun removeProgressEntry(id: String, entryId: String) {
+        val current = _items.value.firstOrNull { it.id == id } ?: return
+        if (current.progressUpdates.none { it.id == entryId }) return
+        persistItem(
+            current.copy(
+                progressUpdates = current.progressUpdates.filterNot { it.id == entryId },
+                updatedAt = clock(),
+            ),
+        )
     }
 
     fun setDone(id: String, done: Boolean) {
@@ -202,11 +232,43 @@ class TodoRepository(
         db.todoQueries.upsertList(list.id, list.name, list.sort, list.createdAt, list.updatedAt, list.deletedAt)
 
     private fun upsertItemDb(item: TodoItem) =
-        db.todoQueries.upsertItem(item.id, item.listId, item.title, item.note, boolToInt(item.done), item.dueAt, item.createdAt, item.updatedAt, item.deletedAt)
+        db.todoQueries.upsertItem(
+            item.id,
+            item.listId,
+            item.title,
+            item.note,
+            item.description,
+            encodeProgress(item.progressUpdates),
+            boolToInt(item.done),
+            item.dueAt,
+            item.createdAt,
+            item.updatedAt,
+            item.deletedAt,
+        )
 }
 
 /** 库中 done 为 INTEGER，落库前转换。 */
 private fun boolToInt(value: Boolean): Long = if (value) 1L else 0L
 
+/** 进度时间线以 JSON 数组存进 progress 列；列值为手工编辑过的坏数据时按无进度处理，不让一条坏行拖垮整个库的读取。 */
+private val progressJson = Json { ignoreUnknownKeys = true }
+
+private fun encodeProgress(entries: List<ProgressEntry>): String = progressJson.encodeToString(entries)
+
+private fun decodeProgress(text: String): List<ProgressEntry> =
+    runCatching { progressJson.decodeFromString<List<ProgressEntry>>(text) }.getOrDefault(emptyList())
+
 private fun DbList.toModel() = TodoList(id, name, sort, createdAt, updatedAt, deletedAt)
-private fun DbItem.toModel() = TodoItem(id, listId, title, note, done = done != 0L, dueAt, createdAt, updatedAt, deletedAt)
+private fun DbItem.toModel() = TodoItem(
+    id = id,
+    listId = listId,
+    title = title,
+    note = note,
+    description = description,
+    progressUpdates = decodeProgress(progress),
+    done = done != 0L,
+    dueAt = dueAt,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    deletedAt = deletedAt,
+)

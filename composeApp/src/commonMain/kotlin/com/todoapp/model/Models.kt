@@ -13,13 +13,27 @@ data class TodoList(
     val deletedAt: Long? = null,
 )
 
-/** 一条待办事项。dueAt 为当地时区当天零点的毫秒时间戳，仅精确到日期。 */
+/** 一条进度更新记录：用户在某时刻对任务进展的文字记录，按创建时间展示。 */
+@Serializable
+data class ProgressEntry(
+    val id: String,
+    val text: String,
+    val createdAt: Long,
+)
+
+/**
+ * 一条待办事项。dueAt 为当地时区当天零点的毫秒时间戳，仅精确到日期。
+ * note 是清单页里展示的短备注；description 是编辑面板里的长描述。
+ * progressUpdates 为进度更新时间线，整体随条目按 updatedAt 做 LWW 合并。
+ */
 @Serializable
 data class TodoItem(
     val id: String,
     val listId: String,
     val title: String,
     val note: String = "",
+    val description: String = "",
+    val progressUpdates: List<ProgressEntry> = emptyList(),
     val done: Boolean = false,
     val dueAt: Long? = null,
     val createdAt: Long,
@@ -37,6 +51,7 @@ data class RemoteSnapshot(
     val items: List<TodoItem> = emptyList(),
 ) {
     companion object {
-        const val SCHEMA_VERSION = 1
+        /** v2：条目新增 description 与 progressUpdates。旧版本读到 v2 会按「版本过高」拒绝，避免合并时静默丢字段。 */
+        const val SCHEMA_VERSION = 2
     }
 }

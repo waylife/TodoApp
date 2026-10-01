@@ -1,0 +1,3 @@
+-- v2：条目新增任务描述与进度更新（进度时间线以 JSON 数组整列存储）。
+ALTER TABLE todoItem ADD COLUMN description TEXT NOT NULL DEFAULT '';
+ALTER TABLE todoItem ADD COLUMN progress TEXT NOT NULL DEFAULT '[]';
