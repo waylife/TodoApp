@@ -7,14 +7,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -22,7 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,32 +46,54 @@ import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
 
-/** 待办编辑面板：标题、备注、截止日期、所属清单、删除。 */
+/**
+ * 待办编辑面板：标题、任务描述、备注、截止日期、所属清单、进度更新、删除。
+ *
+ * 描述与备注的区别：备注是清单页里展示的一行短注；描述是长文详情，只在编辑面板完整展示。
+ * 进度更新是时间线：点「添加」立即落库（不随「保存」提交），随时记一笔进展。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditTodoSheet(
     editingItem: TodoItem?,
     lists: List<TodoList>,
-    onSave: (itemId: String, title: String, note: String, dueAt: Long?, dueAtChanged: Boolean, listId: String) -> Unit,
+    onSave: (itemId: String, title: String, note: String, description: String, dueAt: Long?, dueAtChanged: Boolean, listId: String) -> Unit,
+    onAddProgress: (itemId: String, text: String) -> Unit,
+    onRemoveProgress: (itemId: String, entryId: String) -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val item = editingItem ?: return
 
     var title by remember(item.id) { mutableStateOf(item.title) }
+    var description by remember(item.id) { mutableStateOf(item.description) }
     var note by remember(item.id) { mutableStateOf(item.note) }
     var listId by remember(item.id) { mutableStateOf(item.listId) }
     var dueDate by remember(item.id) { mutableStateOf(item.dueAt?.let { Dates.toLocalDate(it) }) }
+    var progressText by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        // 描述 + 进度时间线让内容高度不可控，必须可滚动
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
+        ) {
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("标题") },
                 singleLine = true,
+            )
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                label = { Text("任务描述") },
+                minLines = 3,
             )
             OutlinedTextField(
                 value = note,
@@ -108,6 +137,85 @@ fun EditTodoSheet(
                 }
             }
 
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+
+            // 进度更新：时间线 + 快速记录
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("进度更新", style = MaterialTheme.typography.labelLarge)
+                if (item.progressUpdates.isNotEmpty()) {
+                    Text(
+                        text = "${item.progressUpdates.size} 条记录",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (item.progressUpdates.isEmpty()) {
+                Text(
+                    text = "还没有进度记录，随时记一笔进展",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            } else {
+                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    // 新的在前，最近进展一眼可见
+                    item.progressUpdates.asReversed().forEach { entry ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = entry.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    text = Dates.formatSyncTime(entry.createdAt),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = { onRemoveProgress(item.id, entry.id) },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "删除该进度记录",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = progressText,
+                    onValueChange = { progressText = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("记录一条进度…") },
+                    singleLine = true,
+                )
+                IconButton(
+                    onClick = {
+                        onAddProgress(item.id, progressText)
+                        progressText = ""
+                    },
+                    enabled = progressText.isNotBlank(),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "添加进度记录")
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -123,6 +231,7 @@ fun EditTodoSheet(
                             item.id,
                             title.trim(),
                             note,
+                            description.trim(),
                             dueDate?.let { Dates.startOfDay(it) },
                             dueAtChanged,
                             listId,

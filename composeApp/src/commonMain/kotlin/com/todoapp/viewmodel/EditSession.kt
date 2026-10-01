@@ -39,6 +39,7 @@ class EditSession(private val repository: TodoRepository, appScope: CoroutineSco
         itemId: String,
         title: String,
         note: String,
+        description: String,
         dueAt: Long?,
         dueAtChanged: Boolean,
         listId: String,
@@ -47,11 +48,21 @@ class EditSession(private val repository: TodoRepository, appScope: CoroutineSco
             id = itemId,
             title = title,
             note = note,
+            description = description,
             dueAt = dueAt,
             dueAtChanged = dueAtChanged,
             listId = listId,
         )
         close()
+    }
+
+    /** 追加一条进度更新；面板保持打开，方便连续记录。 */
+    fun addProgress(itemId: String, text: String) {
+        repository.addProgressEntry(itemId, text)
+    }
+
+    fun removeProgress(itemId: String, entryId: String) {
+        repository.removeProgressEntry(itemId, entryId)
     }
 
     fun delete(itemId: String) {

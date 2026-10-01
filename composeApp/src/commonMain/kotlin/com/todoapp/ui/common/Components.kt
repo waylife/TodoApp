@@ -61,7 +61,7 @@ fun SyncStatusRow(status: SyncStatus, onSync: () -> Unit, modifier: Modifier = M
     }
 }
 
-/** 待办条目行：勾选框 + 标题/备注 + 截止日期角标。 */
+/** 待办条目行：勾选框 + 标题/描述/备注 + 截止日期角标 + 进度数角标。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TodoRow(
@@ -89,6 +89,15 @@ fun TodoRow(
                 textDecoration = if (item.done) TextDecoration.LineThrough else null,
                 color = if (item.done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
             )
+            if (item.description.isNotBlank()) {
+                Text(
+                    text = item.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (item.note.isNotBlank()) {
                 Text(
                     text = item.note,
@@ -114,6 +123,10 @@ fun TodoRow(
                         color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (item.progressUpdates.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    ProgressBadge(item.progressUpdates.size)
+                }
             }
         }
     }
@@ -131,6 +144,23 @@ private fun ListBadge(name: String) {
             text = name,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+            maxLines = 1,
+        )
+    }
+}
+
+/** 进度更新数角标：提示该任务记了进展，点开编辑面板可看时间线。 */
+@Composable
+private fun ProgressBadge(count: Int) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+    ) {
+        Text(
+            text = "进度 $count",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
             maxLines = 1,
         )

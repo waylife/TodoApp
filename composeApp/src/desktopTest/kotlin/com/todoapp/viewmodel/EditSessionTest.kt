@@ -46,13 +46,60 @@ class EditSessionTest {
         val a = db.repository.addItem(l.id, "甲")
         session.open(a.id)
 
-        session.save(itemId = a.id, title = " 新标题 ", note = "备注", dueAt = 42L, dueAtChanged = true, listId = l.id)
+        session.save(
+            itemId = a.id,
+            title = " 新标题 ",
+            note = "备注",
+            description = "任务详情",
+            dueAt = 42L,
+            dueAtChanged = true,
+            listId = l.id,
+        )
 
         val after = db.repository.items.value.single { it.id == a.id }
         assertEquals("新标题", after.title)
         assertEquals("备注", after.note)
+        assertEquals("任务详情", after.description)
         assertEquals(42L, after.dueAt)
         assertNull(session.editingItemId.value, "保存后应关闭编辑面板")
+    }
+
+    @Test
+    fun `addProgress 追加进度记录且不关闭会话`() = runTest {
+        val db = TestDb()
+        val session = EditSession(db.repository, eagerTestScope())
+        val l = db.repository.addList("工作")
+        val a = db.repository.addItem(l.id, "甲")
+        session.open(a.id)
+        db.advance(10)
+
+        session.addProgress(a.id, " 完成调研 ")
+        db.advance(10)
+        session.addProgress(a.id, "开始开发")
+
+        val after = db.repository.items.value.single { it.id == a.id }
+        assertEquals(listOf("完成调研", "开始开发"), after.progressUpdates.map { it.text }, "进度按记录顺序追加")
+        assertEquals(1_000_010L, after.progressUpdates[0].createdAt)
+        assertEquals(1_000_020L, after.progressUpdates[1].createdAt)
+        assertEquals(a.id, session.editingItemId.value, "记录进度后面板应保持打开，方便连续记录")
+    }
+
+    @Test
+    fun `removeProgress 删除指定进度记录`() = runTest {
+        val db = TestDb()
+        val session = EditSession(db.repository, eagerTestScope())
+        val l = db.repository.addList("工作")
+        val a = db.repository.addItem(l.id, "甲")
+        session.open(a.id)
+        session.addProgress(a.id, "第一条")
+        session.addProgress(a.id, "第二条")
+
+        val stale = db.repository.items.value.single { it.id == a.id }.progressUpdates.first { it.text == "第一条" }
+        session.removeProgress(a.id, stale.id)
+
+        val after = db.repository.items.value.single { it.id == a.id }
+        assertEquals(listOf("第二条"), after.progressUpdates.map { it.text })
+        assertEquals(a.id, session.editingItemId.value)
     }
 
     @Test

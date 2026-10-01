@@ -152,9 +152,11 @@ private fun AppNav(container: AppContainer, initialTab: String) {
         editingItem = editingItem,
         // 过滤+排序只在清单数据真正变化时重算一次，避免随任意重组反复分配
         lists = remember(rawLists) { rawLists.filter { it.deletedAt == null }.sortedBy { it.sort } },
-        onSave = { id, title, note, dueAt, dueAtChanged, listId ->
-            container.editSession.save(id, title, note, dueAt, dueAtChanged, listId)
+        onSave = { id, title, note, description, dueAt, dueAtChanged, listId ->
+            container.editSession.save(id, title, note, description, dueAt, dueAtChanged, listId)
         },
+        onAddProgress = container.editSession::addProgress,
+        onRemoveProgress = container.editSession::removeProgress,
         onDelete = container.editSession::delete,
         onDismiss = container.editSession::close,
     )
