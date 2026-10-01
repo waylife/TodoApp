@@ -23,6 +23,8 @@ fun main(args: Array<String>) {
     //   --selftest <输出路径> [--seed] [--tab plan] 启动窗口后截屏
     //   --delete-dialog                            设置页直接展开「删除远端数据」确认框
     //   --import-dialog <备份文件>                  设置页直接展开「导入备份」确认框，用于验证界面
+    //   --edit-dialog <待办标题>                    直接打开该待办的编辑面板，用于验证界面
+    //   --render-height <px>                        覆盖离屏渲染高度（默认 800，验证长内容用）
     val renderFlag = args.indexOf("--render")
     val renderPath = if (renderFlag >= 0) args.getOrNull(renderFlag + 1) else null
     val selftestFlag = args.indexOf("--selftest")
@@ -30,6 +32,7 @@ fun main(args: Array<String>) {
     val seedDemo = args.contains("--seed")
     val deleteDialog = args.contains("--delete-dialog")
     val importDialogPath = args.valueOfFlag("--import-dialog")
+    val editDialogTitle = args.valueOfFlag("--edit-dialog")
     val initialTab = when (args.getOrNull(args.indexOf("--tab") + 1)) {
         "plan" -> "PLAN"
         "settings" -> "SETTINGS"
@@ -44,6 +47,18 @@ fun main(args: Array<String>) {
     }
     if (seedDemo || renderPath != null) seedDemoData(container)
 
+    // 直接打开指定待办的编辑面板（--render 时用于验证界面）。按标题前缀匹配：
+    // gradle --args 按空格切分，含空格的标题传不全，用前缀即可定位
+    if (editDialogTitle != null) {
+        val target = container.repository.items.value
+            .firstOrNull { it.deletedAt == null && it.title.startsWith(editDialogTitle) }
+        if (target != null) {
+            container.editSession.open(target.id)
+        } else {
+            println("EDIT_DIALOG_SKIPPED: 找不到标题以「$editDialogTitle」开头的待办")
+        }
+    }
+
     // 把备份文件喂给导入流程，让确认框直接展开（--render 时用于验证界面）
     if (importDialogPath != null) {
         val backup = File(importDialogPath)
@@ -55,7 +70,7 @@ fun main(args: Array<String>) {
     }
 
     if (renderPath != null) {
-        renderToPng(container, initialTab, renderPath, deleteDialog)
+        renderToPng(container, initialTab, renderPath, deleteDialog, args.valueOfFlag("--render-height")?.toIntOrNull() ?: 800)
         return
     }
 
@@ -120,6 +135,7 @@ private fun renderToPng(
     initialTab: String,
     outputPath: String,
     deleteDialog: Boolean = false,
+    height: Int = 800,
 ) {
     try {
         val content: @androidx.compose.runtime.Composable () -> Unit = when (initialTab) {
@@ -141,13 +157,13 @@ private fun renderToPng(
         }
         val scene = androidx.compose.ui.ImageComposeScene(
             width = 1200,
-            height = 800,
+            height = height,
             density = androidx.compose.ui.unit.Density(1f),
             content = content,
         )
-        // 渲染若干帧让初始状态与 LaunchedEffect 生效
+        // 渲染若干帧让初始状态、LaunchedEffect 与底部面板滑入动画生效（动画约 300ms，每帧 16ms）
         var image: org.jetbrains.skia.Image? = null
-        repeat(5) { frame ->
+        repeat(40) { frame ->
             image = scene.render(frame * 16_000_000L)
         }
         val data = image?.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)
@@ -179,7 +195,7 @@ private fun seedDemoData(container: AppContainer) {
         return Dates.startOfDay(date)
     }
 
-    repo.addItem(work.id, "提交季度报告", due(-2), note = "已逾期示例")
+    repo.addItem(work.id, "提交季度报告", due(-2), note = "已逾期示例", description = "汇总三个组的 OKR 完成度、风险与下季度规划")
     repo.addItem(work.id, "回复客户邮件", due(0))
     repo.addItem(work.id, "准备周会材料", due(0), note = "含本周进度与风险")
     repo.addItem(work.id, "代码评审", due(1))
@@ -187,11 +203,15 @@ private fun seedDemoData(container: AppContainer) {
     repo.addItem(life.id, "买菜", due(0))
     repo.addItem(life.id, "预约体检", due(5))
     repo.addItem(life.id, "缴纳水电费", due(10))
-    repo.addItem(study.id, "读完《Kotlin 实战》第 8 章", due(2))
+    val report = repo.addItem(study.id, "读完《Kotlin 实战》第 8 章", due(2), description = "重点：Flow 与 StateFlow 的差异、背压处理")
     repo.addItem(study.id, "完成 KMP 练习", due(20))
     repo.addItem(study.id, "整理笔记", due(0))
 
     // 一条已完成，验证「已完成」分组
     val doneItem = repo.addItem(work.id, "每日站会", due(0))
     repo.setDone(doneItem.id, true)
+
+    // 进度更新演示：时间线随条目同步
+    repo.addProgressEntry(report.id, "读完 Flow 一节")
+    repo.addProgressEntry(report.id, "第 8 章过半，笔记已整理")
 }
