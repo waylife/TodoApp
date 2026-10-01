@@ -18,10 +18,12 @@
 
 - **清单分组**：多清单管理，长按清单标签可重命名或删除（删除会级联删掉其下待办并同步出去）
 - **待办管理**：添加、编辑标题与备注、完成勾选、删除
+- **任务描述与进度更新**：每条待办可写长文描述，并可随时追加**带时间戳的进度记录**；
+  清单页显示进度数角标，编辑面板按时间线查看（新记录在前，可单条删除）
 - **截止日期**：Material 3 日期选择器，逾期任务标红并置顶
 - **计划视图**：跨清单汇总未完成待办，按 **今日 / 本周 / 两周内 / 一个月内** 切换查看，
   已逾期任务单独分组置顶，其余按天分组
-- **搜索**：按标题与备注过滤
+- **搜索**：按标题、备注、描述与进度记录过滤
 - **深色模式**：跟随系统
 - **WebDAV 同步**：修改后自动同步（防抖 2 秒）+ 启动/回到前台同步 + 手动同步，支持自定义远程目录
 - **数据导入导出**：导出为 JSON 备份文件、从备份文件导入（合并或覆盖），三端均走系统文件选择器
@@ -33,7 +35,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | **17 或更高** | 构建与全部 195 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
+| JDK | **17 或更高** | 构建与全部 207 个测试已在 17.0.7 上验证；若 `java -version` 低于 17，需设置 `JAVA_HOME` |
 | Android SDK | platform **android-37**，minSdk 24 | 另需 `local.properties` 指向 SDK（见下） |
 | Xcode | 仅 iOS 需要，本仓库在 26.2 上验证 | 部署目标 iOS 15.0；需安装 `xcodegen`：`brew install xcodegen` |
 | 其它 | — | Gradle 无需预装，仓库自带 wrapper（9.6） |
@@ -112,7 +114,7 @@ iOS 端数据存放在应用沙盒内的 `todoapp.db`，设置项存于 `NSUserD
 ### 一键运行（日常入口）
 
 ```bash
-scripts/run_tests.sh                        # 全量跑（195 个用例，JVM 上）
+scripts/run_tests.sh                        # 全量跑（207 个用例，JVM 上）
 scripts/run_tests.sh --filter SyncMerge     # 只跑名字匹配的测试类
 scripts/run_tests.sh --filter "TodosViewModel 搜索"
 scripts/run_tests.sh --rerun                # 忽略 up-to-date 缓存强制重跑
@@ -146,18 +148,18 @@ scripts/run_tests.sh --help
 - **纯函数优先**：合并（`SyncMerge`）、分组（`PlanGrouper`）、备份语义（`TodoTransfer`）
   都是无副作用的 object，单测不需要任何夹具。
 
-### 用例分布（195 个）
+### 用例分布（207 个）
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
-| `TodoRepositoryTest` | 22 | 仓库层：CRUD 与局部更新语义（空白标题回退、dueAtChanged 门控）、落库后由新实例读回、变更回调逐次触发/同步写库时静默、replaceAll、clearAll、purgeDeleted 墓碑清理、变更计数（用户变更递增、引擎写库不递增） |
-| `TodosViewModelTest` | 15 | 清单页：过滤与搜索（标题/备注、忽略大小写）、未完成排序与已完成分区、添加待办的目标清单选择（自动建「默认」清单、**选中清单被远端删除后回退到存活清单**）、清单删除与选中态、toggleDone |
-| `TodoTransferTest` | 24 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
+| `TodoRepositoryTest` | 27 | 仓库层：CRUD 与局部更新语义（空白标题回退、dueAtChanged 门控、描述未传时保留）、进度记录的增删与时间戳（空白内容不落库、推进条目 updatedAt）、落库后由新实例读回、变更回调逐次触发/同步写库时静默、replaceAll、clearAll、purgeDeleted 墓碑清理、变更计数（用户变更递增、引擎写库不递增） |
+| `TodosViewModelTest` | 16 | 清单页：过滤与搜索（标题/备注/描述/进度记录、忽略大小写）、未完成排序与已完成分区、添加待办的目标清单选择（自动建「默认」清单、**选中清单被远端删除后回退到存活清单**）、清单删除与选中态、toggleDone |
+| `TodoTransferTest` | 26 | 备份编解码与格式校验（空文件、非 JSON、非本应用文件、版本过高、未知字段、**v1 旧备份导入时新字段取默认值**）、统计、导入影响预估与预估-实际一致性、合并/覆盖语义、重复导入幂等 |
 | `WebDavSyncIntegrationTest` | 19 | 端到端同步：首次上传、多级目录创建、目录已存在时重复同步、双向同步、并发冲突收敛、删除传播、ETag 冲突重试、压缩表示的 ETag 归一化、回到前台的节流、**合并窗口内的并发编辑不被清掉**、**远端快照版本过新时报错且不降级覆写**、**远端内容损坏时报错且不动本地数据**、**内容无变化时跳过上传与建目录** |
 | `TransferViewModelTest` | 16 | 导入导出界面：导出文案与快照同构、取消/失败分支、忙碌保护、解析-预览-确认流程、合并/覆盖导入语义、未确认不写库、dismiss 后确认是无操作、导出/导入异常时复位 busy 并提示 |
 | `DesktopDocumentTransferTest` | 12 | 桌面端**真实**读写路径（只把弹对话框换成固定返回值）：写盘/覆盖写/路径不可写、读回、往返后墓碑不丢、SAVE 与 LOAD 模式、建议文件名透传、超大文件在读取前被拦下且边界值放行 |
 | `DataTransferIntegrationTest` | 10 | 导入导出端到端：真实内存库 + 真实同步引擎，只把文件选择器换成内存实现；覆盖导出内容、取消/失败分支、解析失败不动数据、关闭确认框后不写入、导入后主动同步到远端 |
-| `SyncMergeTest` | 8 | 合并算法：新增、并发编辑、删除优先、删除后复活、参数顺序对称性（保证多端收敛） |
+| `SyncMergeTest` | 9 | 合并算法：新增、并发编辑、删除优先、删除后复活、**描述与进度随较新条目整体胜出**、参数顺序对称性（保证多端收敛） |
 | `PlanGrouperTest` | 8 | 计划页分组：过滤无日期/已完成/已删除项、逾期不重复展示、范围边界、组内排序 |
 | `WebDavConfigTest` | 8 | 连接配置判定：`http://`/`https://` 前缀校验（`httpfoo` 之类不算合法）、空白地址/目录 |
 | `SyncEngineTest` | 7 | 同步触发与护栏：未配置分支（syncNow/scheduleSync/deleteRemoteData）、前台节流（20 秒内跳过、从未成功则放行）、防抖到期触发、**删除远端数据前先取消排队中的防抖同步** |
@@ -167,8 +169,8 @@ scripts/run_tests.sh --help
 | `PlanViewModelTest` | 6 | 计划页：范围切换、逾期置顶且不重复出现在日期分组、已完成/已删除/无日期过滤、清单名映射（today 注入固定日期） |
 | `SettingsStoreTest` | 6 | 设置存储：默认值、保存归一化、空目录回退默认、新实例从持久层读回、lastSyncAt |
 | `WebDavClientTest` | 4 | 客户端上传前置条件：If-Match 匹配现有 ETag、GET 无 ETag 时退化为 `If-Match: *`、文件在 GET 与 PUT 之间被删时拒绝重建、409 重试保留 isNew 前置条件且 412 走冲突重试 |
-| `DesktopDbMigrationTest` | 3 | 桌面端建库/迁移：全新库建表并写入 `PRAGMA user_version`、旧库重开数据保留且版本号补齐、更高版本号的库重开时版本号只升不降 |
-| `EditSessionTest` | 5 | 编辑会话：打开/保存（更新并关闭）/删除并关闭、条目被外部删除后面板显示为空 |
+| `DesktopDbMigrationTest` | 4 | 桌面端建库/迁移：全新库建表并写入 `PRAGMA user_version`、旧库（v1 结构 / 无版本号）重开数据保留且版本号补齐、**v1→v2 迁移后新增列可用**、更高版本号的库重开时版本号只升不降 |
+| `EditSessionTest` | 7 | 编辑会话：打开/保存（更新并关闭、描述落库）、进度记录的追加（不关闭面板）与单条删除、条目被外部删除后面板显示为空 |
 | `RealWebDavSmokeTest` | 1 | 可选：对着**真实 WebDAV 服务器**跑完整同步闭环，未提供凭据时自动跳过 |
 
 集成测试会在进程内启动一个**迷你 WebDAV 服务**（支持 MKCOL/GET/PUT 与 ETag），用两台独立
@@ -206,6 +208,9 @@ chmod 600 /tmp/todoapp-dav-test.properties
 ```bash
 # 清单页（--seed 注入跨今日/本周/两周/一个月的演示数据）
 ./gradlew :composeApp:run --args="--render /tmp/home.png --seed"
+
+# 编辑面板（--edit-dialog 按标题前缀打开某条待办；--render-height 加高画布看完整面板）
+./gradlew :composeApp:run --args="--render /tmp/edit.png --seed --edit-dialog 读完 --render-height 1400"
 
 # 计划页，可指定时间范围
 ./gradlew :composeApp:run --args="--render /tmp/plan.png --tab plan --range month"
@@ -249,18 +254,22 @@ chmod 600 /tmp/todoapp-dav-test.properties
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "rev": 42,
   "savedAt": 1758326400000,
   "lists": [{ "id": "...", "name": "工作", "sort": 1, "createdAt": 0, "updatedAt": 0, "deletedAt": null }],
-  "items": [{ "id": "...", "listId": "...", "title": "写周报", "note": "", "done": false,
-              "dueAt": 1758326400000, "createdAt": 0, "updatedAt": 0, "deletedAt": null }]
+  "items": [{ "id": "...", "listId": "...", "title": "写周报", "note": "", "description": "汇总各组进度与风险",
+              "progressUpdates": [{ "id": "...", "text": "完成调研", "createdAt": 1758300000000 }],
+              "done": false, "dueAt": 1758326400000, "createdAt": 0, "updatedAt": 0, "deletedAt": null }]
 }
 ```
 
 - 所有实体使用 **UUID** 主键，因此多设备离线创建不会撞号
 - `dueAt` 存当地时区当天零点的毫秒时间戳（只精确到日期）
 - `deletedAt` 非空表示**墓碑（软删除）**，用于把删除动作传播到其它设备
+- `description`（任务描述）与 `progressUpdates`（进度更新时间线）是 v2 新增字段：
+  它们作为条目的一部分**整体**参与 LWW 合并（不做字段级合并），最后写过该条目的设备胜出。
+  旧版本应用读到 v2 快照会按「版本过高」拒绝同步，而不是把不认识的字段静默丢掉
 
 ### 合并规则（最后写入者胜）
 
