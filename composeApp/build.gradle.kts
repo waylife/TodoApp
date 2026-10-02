@@ -82,6 +82,21 @@ compose.desktop {
             packageVersion = "1.0.0"
             description = "Kotlin Multiplatform todo app with WebDAV sync"
             vendor = "TodoApp"
+
+            // jlink 模块显式声明：compose 插件默认的依赖分析看不到 JDBC 的
+            // 动态加载，缺 java.sql 会让安装包启动即崩；清单 = jdeps 对产物
+            // 的分析结果 + java.sql / jdk.unsupported（Unsafe）/ TLS 所需的
+            // jdk.crypto.ec。java.logging/java.xml 等由传递依赖自动带上。
+            modules(
+                "java.base",
+                "java.desktop",
+                "java.instrument",
+                "java.management",
+                "java.prefs",
+                "java.sql",
+                "jdk.unsupported",
+                "jdk.crypto.ec",
+            )
         }
     }
 }
