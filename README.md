@@ -1,5 +1,7 @@
 # TodoApp · Kotlin Multiplatform 跨平台待办
 
+[![CI](https://github.com/waylife/TodoApp/actions/workflows/ci.yml/badge.svg)](https://github.com/waylife/TodoApp/actions/workflows/ci.yml)
+
 一套 Kotlin 代码同时构建 **Android / iOS / 桌面端（macOS·Windows·Linux）** 的待办应用，
 界面与业务逻辑全部共享（Compose Multiplatform），数据通过 **WebDAV 协议** 在设备间同步，
 无需自建服务端。
@@ -224,6 +226,26 @@ chmod 600 /tmp/todoapp-dav-test.properties
 
 `--range` 取值为 `today`（默认）/ `week` / `2weeks` / `month`。另有 `--selftest <路径>`
 会在真实窗口启动后截屏，适合人工确认窗口行为；`--delete-dialog` 用于展开「删除远端数据」确认框。
+
+---
+
+## CI（GitHub Actions）
+
+仓库自带 CI（`.github/workflows/ci.yml`），**每天定时跑一次**（UTC 18:00 / 北京时间 02:00），
+也可在 Actions 页手动触发（手动触发无条件构建）。定时那次会先对比上次成功构建对应的 commit：
+没有新提交、或只改了 `*.md`，就只跑一个几秒钟的检查 job，四个构建 job 全部跳过。
+同一分支只保留最新一次运行，旧构建会被自动取消：
+
+| Job | Runner | 内容 | 产物 |
+| --- | --- | --- | --- |
+| 检查是否有新改动 | ubuntu | 定时触发时对比上次成功构建的 commit，无代码改动则跳过后续 job | — |
+| 测试（JVM） | ubuntu | `:composeApp:desktopTest`（commonTest + desktopTest 全量） | 失败时上传测试报告 |
+| Android APK | ubuntu | `assembleDebug` + `assembleRelease`（release 为未签名 APK，仅验证可构建） | `android-apk` |
+| 桌面安装包 | macOS / Windows / Linux 三平台矩阵 | `:composeApp:packageDistributionForCurrentOS` | DMG / MSI / DEB |
+| iOS | macOS | `iosSimulatorArm64Test` + 编译真机目标 iosArm64 | 失败时上传测试报告 |
+
+APK 与安装包产物保留 14 天，在运行详情页底部 Artifacts 处下载；签名仍走本地脚本
+`scripts/build_release_apk.sh`（密钥库不入库，CI 不做签名）。
 
 ---
 

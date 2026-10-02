@@ -1,0 +1,225 @@
+# CI：JVM 测试 + Android APK + 三平台桌面安装包 + iOS 模拟器测试
+#
+# 触发：
+#   - 每天 UTC 18:00（北京时间 02:00）定时跑一次；定时那次先对比上次成功
+#     构建对应的 commit，若自那以来没有代码改动（只改 *.md 不算），
+#     四个构建 job 全部跳过
+#   - Actions 页手动触发（workflow_dispatch）时无条件构建
+#
+# 产物在运行页的 Artifacts 里下载：
+#   - android-apk            debug 与 release（未签名）APK
+#   - desktop-macos-latest   macOS DMG
+#   - desktop-windows-latest Windows MSI
+#   - desktop-ubuntu-latest  Linux DEB
+#   - 测试报告仅在各 job 失败时上传，用于排查
+name: CI
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 每天 UTC 18:00 = 北京时间 02:00
+  workflow_dispatch:
+
+# 同一分支只保留最新一次运行，取消还在跑的旧任务
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 读取本 workflow 的运行历史，用于「无改动跳过」判断
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    # 统一用 bash：Windows runner 自带 Git Bash，./gradlew 三平台通用
+    shell: bash
+
+jobs:
+  changes:
+    name: 检查是否有新改动
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # 需要在上次成功构建的 commit 与 HEAD 之间做 git diff
+
+      - name: 判断是否需要构建
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "手动触发，无条件构建"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 本 workflow 在同一分支上最近一次成功运行对应的 commit
+          LAST_SHA="$(gh api \
+            "repos/$REPO/actions/workflows/ci.yml/runs?branch=$BRANCH&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].head_sha' || true)"
+
+          if [ -z "$LAST_SHA" ]; then
+            echo "没有历史成功记录，构建"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$LAST_SHA" = "$HEAD_SHA" ]; then
+            echo "自上次成功构建以来没有新提交，跳过本次构建"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 与上次成功构建之间只改了 Markdown 也视为无改动
+          if CHANGED="$(git diff --name-only "$LAST_SHA" "$HEAD_SHA" -- . ':(exclude)*.md' 2>/dev/null)" \
+            && [ -z "$CHANGED" ]; then
+            echo "仅文档改动，跳过本次构建"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "检测到代码改动（$LAST_SHA..$HEAD_SHA），构建"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: 测试（JVM）
+    needs: changes
+    if: needs.changes.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 运行 JVM 测试（commonTest + desktopTest）
+        run: ./gradlew :composeApp:desktopTest --stacktrace
+
+      - name: 上传测试报告（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-jvm
+          path: composeApp/build/reports/tests/
+          if-no-files-found: ignore
+
+  android:
+    name: Android APK
+    needs: changes
+    if: needs.changes.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 不做签名（密钥库不入库），release 产物为未签名 APK，仅验证可构建
+      - name: 构建 Debug 与 Release APK
+        run: ./gradlew :androidApp:assembleDebug :androidApp:assembleRelease --stacktrace
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: androidApp/build/outputs/apk/**/*.apk
+          retention-days: 14
+
+  desktop:
+    name: 桌面安装包（${{ matrix.os }}）
+    needs: changes
+    if: needs.changes.outputs.skip != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Gradle 配置期会碰 Android SDK（androidKmpLibrary 插件），macOS/Windows
+      # 镜像里的 SDK 版本不保证齐全，用该 action 统一准备并接受许可
+      - name: 准备 Android SDK（配置期需要）
+        if: runner.os != 'Linux'
+        uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # macOS 出 DMG、Windows 出 MSI（WiX 由 Compose 插件自动下载）、Linux 出 DEB
+      - name: 打包当前系统安装包
+        run: ./gradlew :composeApp:packageDistributionForCurrentOS --stacktrace
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            composeApp/build/compose/binaries/main/**/*.dmg
+            composeApp/build/compose/binaries/main/**/*.msi
+            composeApp/build/compose/binaries/main/**/*.deb
+          retention-days: 14
+          if-no-files-found: error
+
+  ios:
+    name: iOS（模拟器测试）
+    needs: changes
+    if: needs.changes.outputs.skip != 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 准备 Android SDK（配置期需要）
+        uses: android-actions/setup-android@v3
+
+      # Kotlin/Native 工具链装在 ~/.konan（不在 Gradle 缓存内），单独缓存
+      - name: 缓存 Kotlin/Native 工具链
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 模拟器跑 iOS 侧测试，同时把真机架构（iosArm64）编译一遍
+      - name: 运行 iOS 模拟器测试并编译真机目标
+        run: ./gradlew :composeApp:iosSimulatorArm64Test :composeApp:compileKotlinIosArm64 --stacktrace
+
+      - name: 上传测试报告（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-ios
+          path: composeApp/build/reports/tests/iosSimulatorArm64Test/
+          if-no-files-found: ignore
