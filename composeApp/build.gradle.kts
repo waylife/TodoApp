@@ -32,7 +32,9 @@ kotlin {
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
-            implementation(libs.compose.icons.extended)
+            // material-icons-core：Icons 对象与核心图标集（material3 1.9+
+            // 不再传递提供）；扩展图标已内联进 AppIcons.kt，勿引 extended
+            implementation(libs.compose.icons.core)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
