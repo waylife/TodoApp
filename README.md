@@ -249,6 +249,40 @@ APK 与安装包产物保留 14 天，在运行详情页底部 Artifacts 处下�
 
 ---
 
+## 包体积
+
+| 端 | 优化前 | 优化后 | 手段 |
+| --- | --- | --- | --- |
+| Android release APK | 13.8 MB | **1.88 MB**（−86%） | R8 收缩 + 资源剔除 |
+| macOS app image | 178 MB | **143 MB**（−20%） | 移除图标扩展包 + jlink 模块修正 |
+| iOS | — | 链接期剥离 | Xcode Release 裁剪设置 |
+
+具体改动：
+
+- **Android `release` 开启 R8**（`isMinifyEnabled` + `isShrinkResources`，
+  规则在 `androidApp/proguard-rules.pro`）：依赖字节码解压后约 48 MB，
+  收缩后只剩 2.9 MB；另剔除 `META-INF` 杂项、coroutines 调试探针与依赖清单。
+- **不引 `material-icons-extended`**：App 只用到其中 2 个图标（`Checklist`、
+  `EventNote`），路径数据取自官方 SVG 内联在 `composeApp/.../ui/AppIcons.kt`，
+  核心图标集改用很小的 `material-icons-core`。扩展包在桌面端是 36.2 MB 的
+  jar，debug APK 也因此小约 8 MB。
+- **桌面 jlink 模块显式声明**：compose 插件默认的依赖分析看不到 JDBC 动态
+  加载，产出的安装包启动即崩（`java/sql/DriverManager` 找不到）。现在显式
+  声明 `java.sql`、`jdk.unsupported`、`jdk.crypto.ec`（TLS）等必需模块。
+- **iOS `project.yml` Release 配置**：开启链接期死代码剔除
+  （`DEAD_CODE_STRIPPING`）与符号剥离（`DEPLOYMENT_POSTPROCESSING` +
+  `STRIP_INSTALLED_PRODUCT`）。Kotlin/Native 侧本就是静态库 + release 优化
+  + 死代码消除，无需额外开关。
+
+验证大小：
+
+```bash
+ls -lh androidApp/build/outputs/apk/release/*.apk          # Android
+du -sh composeApp/build/compose/binaries/main/app/TodoApp.app  # macOS app image
+```
+
+---
+
 ## WebDAV 配置
 
 在应用内「设置」页填写以下四项，先点「测试连接」确认无误，再点「保存并同步」：
