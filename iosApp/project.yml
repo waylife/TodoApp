@@ -37,6 +37,15 @@ targets:
           - "$(inherited)"
           - "$(BUILT_PRODUCTS_DIR)"
         OTHER_LDFLAGS: "$(inherited) -framework TodoApp -lsqlite3"
+      configs:
+        Release:
+          # 链接期剔除不可达代码，并剥离二进制里的局部符号表，
+          # 上架 App Store 的包更小（Kotlin/Native 静态库本身已是
+          # release + 死代码消除产物，这里负责最终链接的瘦身）
+          DEAD_CODE_STRIPPING: YES
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: non-global
     preBuildScripts:
       - name: BuildKotlinFramework
         script: |
