@@ -163,11 +163,27 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Gradle 配置期会碰 Android SDK（androidKmpLibrary 插件），macOS/Windows
-      # 镜像里的 SDK 版本不保证齐全，用该 action 统一准备并接受许可
-      - name: 准备 Android SDK（配置期需要）
+      # Gradle 配置期会碰 Android SDK（androidKmpLibrary 插件）。macOS/Windows
+      # 镜像里预装了 SDK，这里只需接受许可，AGP 会自动补装缺失的
+      # platform/build-tools。不要用 android-actions/setup-android@v3：它会
+      # 安装已被 Google 下架的 tools 包，在 macOS/Windows 上稳定失败。
+      - name: 接受 Android SDK 许可（非 Linux）
         if: runner.os != 'Linux'
-        uses: android-actions/setup-android@v3
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR" ]; then
+            command -v cygpath >/dev/null 2>&1 && SDK_DIR="$(cygpath -u "$SDK_DIR")"
+            SDKM="$(ls -1 "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager.bat 2>/dev/null | head -n 1 || true)"
+            [ -n "$SDKM" ] || SDKM="$(ls -1 "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+            if [ -n "$SDKM" ]; then
+              yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+              echo "已接受 Android SDK 许可：$SDK_DIR"
+            else
+              echo "未找到 sdkmanager，跳过许可接受"
+            fi
+          else
+            echo "未找到预装 Android SDK（ANDROID_HOME='${ANDROID_HOME:-}'）"
+          fi
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -200,8 +216,20 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: 准备 Android SDK（配置期需要）
-        uses: android-actions/setup-android@v3
+      - name: 接受 Android SDK 许可（配置期需要）
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR" ]; then
+            SDKM="$(ls -1 "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+            if [ -n "$SDKM" ]; then
+              yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+              echo "已接受 Android SDK 许可：$SDK_DIR"
+            else
+              echo "未找到 sdkmanager，跳过许可接受"
+            fi
+          else
+            echo "未找到预装 Android SDK（ANDROID_HOME='${ANDROID_HOME:-}'）"
+          fi
 
       # Kotlin/Native 工具链装在 ~/.konan（不在 Gradle 缓存内），单独缓存
       - name: 缓存 Kotlin/Native 工具链
