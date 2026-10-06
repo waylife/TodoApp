@@ -155,6 +155,7 @@ private fun AppNav(container: AppContainer, initialTab: String) {
         },
         onAddProgress = container.editSession::addProgress,
         onRemoveProgress = container.editSession::removeProgress,
+        onSetProgress = container.editSession::setProgress,
         onDelete = container.editSession::delete,
         onDismiss = container.editSession::close,
     )

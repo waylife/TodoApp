@@ -1,0 +1,3 @@
+-- 迁移 v3 → v4（SQLDelight 语义：文件号 N.sqm 把库从版本 N 迁到 N+1）：
+-- 条目新增整体进度百分比（0-100），NULL 表示用户尚未设置。
+ALTER TABLE todoItem ADD COLUMN progressPercent INTEGER;

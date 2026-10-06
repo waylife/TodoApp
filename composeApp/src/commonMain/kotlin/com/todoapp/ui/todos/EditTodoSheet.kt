@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -44,13 +45,15 @@ import com.todoapp.util.Dates
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
+import kotlin.math.roundToInt
 import kotlin.time.Instant
 
 /**
- * 待办编辑面板：标题、任务描述、备注、截止日期、所属清单、进度更新、删除。
+ * 待办编辑面板：标题、任务描述、备注、整体进度、截止日期、所属清单、进度更新、删除。
  *
  * 描述与备注的区别：备注是清单页里展示的一行短注；描述是长文详情，只在编辑面板完整展示。
  * 进度更新是时间线：点「添加」立即落库（不随「保存」提交），随时记一笔进展。
+ * 整体进度同理：拖动滑杆松手即落库，null 表示「未设置」，清单行不显示角标。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +63,7 @@ fun EditTodoSheet(
     onSave: (itemId: String, title: String, note: String, description: String, dueAt: Long?, dueAtChanged: Boolean, listId: String) -> Unit,
     onAddProgress: (itemId: String, text: String) -> Unit,
     onRemoveProgress: (itemId: String, entryId: String) -> Unit,
+    onSetProgress: (itemId: String, percent: Int?) -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -70,6 +74,8 @@ fun EditTodoSheet(
     var note by remember(item.id) { mutableStateOf(item.note) }
     var listId by remember(item.id) { mutableStateOf(item.listId) }
     var dueDate by remember(item.id) { mutableStateOf(item.dueAt?.let { Dates.toLocalDate(it) }) }
+    // 拖动中显示草稿值，松手才落库；null 表示未设置
+    var progressDraft by remember(item.id) { mutableStateOf(item.progressPercent?.toFloat()) }
     var progressText by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
 
@@ -101,6 +107,38 @@ fun EditTodoSheet(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 label = { Text("备注") },
                 minLines = 2,
+            )
+
+            // 整体进度：0-100%，松手即落库；与完成状态相互独立
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = progressDraft?.let { "整体进度：${it.roundToInt()}%" } ?: "整体进度未设置",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (progressDraft == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                )
+                TextButton(
+                    onClick = {
+                        progressDraft = null
+                        onSetProgress(item.id, null)
+                    },
+                    enabled = progressDraft != null,
+                ) { Text("清除") }
+            }
+            Slider(
+                value = progressDraft ?: 0f,
+                onValueChange = { progressDraft = it },
+                onValueChangeFinished = {
+                    val percent = (progressDraft ?: 0f).roundToInt().coerceIn(0, 100)
+                    onSetProgress(item.id, percent)
+                    progressDraft = percent.toFloat()
+                },
+                valueRange = 0f..100f,
+                steps = 19, // 5% 一档，触屏上好调准
+                modifier = Modifier.fillMaxWidth(),
             )
 
             // 截止日期

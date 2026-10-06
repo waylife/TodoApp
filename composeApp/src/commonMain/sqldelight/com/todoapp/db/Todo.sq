@@ -18,7 +18,8 @@ CREATE TABLE todoItem (
     dueAt INTEGER,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL,
-    deletedAt INTEGER
+    deletedAt INTEGER,
+    progressPercent INTEGER
 );
 
 upsertList:
@@ -26,8 +27,8 @@ INSERT OR REPLACE INTO todoList(id, name, sort, createdAt, updatedAt, deletedAt)
 VALUES (?, ?, ?, ?, ?, ?);
 
 upsertItem:
-INSERT OR REPLACE INTO todoItem(id, listId, title, note, description, progress, done, dueAt, createdAt, updatedAt, deletedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO todoItem(id, listId, title, note, description, progress, done, dueAt, createdAt, updatedAt, deletedAt, progressPercent)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectAllLists:
 SELECT * FROM todoList;

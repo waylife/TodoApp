@@ -24,6 +24,7 @@ data class ProgressEntry(
 /**
  * 一条待办事项。dueAt 为当地时区当天零点的毫秒时间戳，仅精确到日期。
  * note 是清单页里展示的短备注；description 是编辑面板里的长描述。
+ * progressPercent 是用户手工设置的整体进度（0-100），null 表示尚未设置；
  * progressUpdates 为进度更新时间线，整体随条目按 updatedAt 做 LWW 合并。
  */
 @Serializable
@@ -34,6 +35,7 @@ data class TodoItem(
     val note: String = "",
     val description: String = "",
     val progressUpdates: List<ProgressEntry> = emptyList(),
+    val progressPercent: Int? = null,
     val done: Boolean = false,
     val dueAt: Long? = null,
     val createdAt: Long,
@@ -51,7 +53,11 @@ data class RemoteSnapshot(
     val items: List<TodoItem> = emptyList(),
 ) {
     companion object {
-        /** v2：条目新增 description 与 progressUpdates。旧版本读到 v2 会按「版本过高」拒绝，避免合并时静默丢字段。 */
-        const val SCHEMA_VERSION = 2
+        /**
+         * v2：条目新增 description 与 progressUpdates。
+         * v3：条目新增 progressPercent。
+         * 旧版本读到更高版本会按「版本过高」拒绝，避免合并时静默丢字段。
+         */
+        const val SCHEMA_VERSION = 3
     }
 }

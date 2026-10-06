@@ -117,10 +117,11 @@ class SyncMergeTest {
 
     @Test
     fun `描述与进度随较新的条目整体胜出`() {
-        // 描述与进度时间线不做字段级合并：哪个端最后写过条目，就整体采用哪个端的版本
+        // 描述、进度时间线与整体进度都不做字段级合并：哪个端最后写过条目，就整体采用哪个端的版本
         val onA = item("a", "写周报", 300).copy(
             description = "A 端补充的描述",
             progressUpdates = listOf(ProgressEntry(id = "p1", text = "完成调研", createdAt = 300)),
+            progressPercent = 60,
         )
         val onB = item("a", "写周报", 200).copy(description = "B 端的旧描述")
 
@@ -130,5 +131,6 @@ class SyncMergeTest {
         assertEquals(merged.items, mergedReversed.items, "交换参数后结果必须一致")
         assertEquals("A 端补充的描述", merged.items[0].description)
         assertEquals(listOf("完成调研"), merged.items[0].progressUpdates.map { it.text })
+        assertEquals(60, merged.items[0].progressPercent)
     }
 }

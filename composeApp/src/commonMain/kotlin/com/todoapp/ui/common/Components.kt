@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -123,6 +124,10 @@ fun TodoRow(
                         color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (item.progressPercent != null) {
+                    Spacer(Modifier.width(6.dp))
+                    ProgressPercentBadge(item.progressPercent)
+                }
                 if (item.progressUpdates.isNotEmpty()) {
                     Spacer(Modifier.width(6.dp))
                     ProgressBadge(item.progressUpdates.size)
@@ -164,6 +169,44 @@ private fun ProgressBadge(count: Int) {
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
             maxLines = 1,
         )
+    }
+}
+
+/** 整体进度角标：迷你进度条 + 百分比。未设置（null）不显示。 */
+@Composable
+private fun ProgressPercentBadge(percent: Int) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                Modifier
+                    .width(28.dp)
+                    .height(4.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.25f),
+                        CircleShape,
+                    ),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(percent / 100f)
+                        .height(4.dp)
+                        .background(MaterialTheme.colorScheme.onPrimaryContainer, CircleShape),
+                )
+            }
+            Text(
+                text = "$percent%",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 1,
+            )
+        }
     }
 }
 

@@ -456,9 +456,9 @@ class WebDavSyncIntegrationTest {
         testTime += 100
         sync(engineA)
 
-        // 模拟未来版本的应用写入了 v3 快照，含本端不认识的数据
+        // 模拟未来版本的应用写入了 v4 快照，含本端不认识的数据
         val future = RemoteSnapshot(
-            schemaVersion = 3,
+            schemaVersion = 4,
             rev = 9,
             savedAt = testTime,
             lists = listOf(TodoList(id = "future-list", name = "新版清单", createdAt = 1, updatedAt = 1)),

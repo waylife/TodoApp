@@ -159,6 +159,17 @@ class TodoRepository(
         persistItem(current.copy(done = done, updatedAt = clock()))
     }
 
+    /**
+     * 设置整体进度百分比（0-100，超出范围收敛进区间）；null 表示清除，回到「未设置」。
+     * 与 done 相互独立：100% 不自动勾选完成，勾选完成也不改百分比。
+     */
+    fun setProgress(id: String, percent: Int?) {
+        val current = _items.value.firstOrNull { it.id == id } ?: return
+        val clamped = percent?.coerceIn(0, 100)
+        if (current.progressPercent == clamped) return
+        persistItem(current.copy(progressPercent = clamped, updatedAt = clock()))
+    }
+
     fun deleteItem(id: String) {
         val now = clock()
         val current = _items.value.firstOrNull { it.id == id } ?: return
@@ -244,6 +255,7 @@ class TodoRepository(
             item.createdAt,
             item.updatedAt,
             item.deletedAt,
+            item.progressPercent?.toLong(),
         )
 }
 
@@ -266,6 +278,7 @@ private fun DbItem.toModel() = TodoItem(
     note = note,
     description = description,
     progressUpdates = decodeProgress(progress),
+    progressPercent = progressPercent?.toInt(),
     done = done != 0L,
     dueAt = dueAt,
     createdAt = createdAt,

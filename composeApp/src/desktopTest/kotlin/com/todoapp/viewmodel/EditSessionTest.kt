@@ -103,6 +103,23 @@ class EditSessionTest {
     }
 
     @Test
+    fun `setProgress 更新整体进度且不关闭会话`() = runTest {
+        val db = TestDb()
+        val session = EditSession(db.repository, eagerTestScope())
+        val l = db.repository.addList("工作")
+        val a = db.repository.addItem(l.id, "甲")
+        session.open(a.id)
+        db.advance(10)
+
+        session.setProgress(a.id, 60)
+
+        val after = db.repository.items.value.single { it.id == a.id }
+        assertEquals(60, after.progressPercent, "整体进度应立即落库，不随「保存」提交")
+        assertEquals(1_000_010L, after.updatedAt)
+        assertEquals(a.id, session.editingItemId.value, "设置进度后面板应保持打开")
+    }
+
+    @Test
     fun `delete 删除条目并关闭会话`() = runTest {
         val db = TestDb()
         val session = EditSession(db.repository, eagerTestScope())

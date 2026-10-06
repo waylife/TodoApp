@@ -248,6 +248,73 @@ class TodoRepositoryTest {
         assertEquals(1_000_010L, after.updatedAt)
     }
 
+    // ---------- 整体进度 ----------
+
+    @Test
+    fun `setProgress 设置百分比并推进时间戳`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        db.advance(10)
+
+        repo.setProgress(a.id, 45)
+
+        val after = repo.items.value.single { it.id == a.id }
+        assertEquals(45, after.progressPercent)
+        assertEquals(1_000_010L, after.updatedAt, "进度变更应推进条目 updatedAt，随条目参与 LWW 合并")
+    }
+
+    @Test
+    fun `setProgress 越界值收敛到 0-100`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+
+        repo.setProgress(a.id, 130)
+        assertEquals(100, repo.items.value.single { it.id == a.id }.progressPercent)
+
+        repo.setProgress(a.id, -5)
+        assertEquals(0, repo.items.value.single { it.id == a.id }.progressPercent)
+    }
+
+    @Test
+    fun `setProgress 传 null 清除进度`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        repo.setProgress(a.id, 45)
+        db.advance(10)
+
+        repo.setProgress(a.id, null)
+
+        val after = repo.items.value.single { it.id == a.id }
+        assertNull(after.progressPercent, "null 应回到「未设置」状态，与 0% 区分")
+        assertEquals(1_000_010L, after.updatedAt)
+    }
+
+    @Test
+    fun `setProgress 相同值不重复落库`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        repo.setProgress(a.id, 45)
+        val before = repo.changeVersion
+
+        repo.setProgress(a.id, 45)
+
+        assertEquals(before, repo.changeVersion, "值未变化不应视为一次用户变更，避免触发无谓同步")
+    }
+
+    @Test
+    fun `setDone 与 setProgress 相互独立`() {
+        val l = repo.addList("工作")
+        val a = repo.addItem(l.id, "甲")
+        db.advance(10)
+        repo.setProgress(a.id, 100)
+
+        repo.setDone(a.id, true)
+
+        val after = repo.items.value.single { it.id == a.id }
+        assertTrue(after.done)
+        assertEquals(100, after.progressPercent, "勾选完成不应改动整体进度，100% 也不应自动勾选")
+    }
+
     @Test
     fun `deleteItem 墓碑化待办`() {
         val l = repo.addList("工作")
@@ -265,6 +332,7 @@ class TodoRepositoryTest {
     fun `对不存在的条目操作无副作用`() {
         repo.updateItem("no-such-id", title = "x")
         repo.setDone("no-such-id", true)
+        repo.setProgress("no-such-id", 50)
         repo.deleteItem("no-such-id")
         assertTrue(repo.items.value.isEmpty())
     }
@@ -278,13 +346,14 @@ class TodoRepositoryTest {
         val a = repo.addItem(l1.id, "甲", dueAt = 42L, note = "备注", description = "任务详情")
         repo.setDone(a.id, true)
         repo.addProgressEntry(a.id, "进度一笔")
+        repo.setProgress(a.id, 45)
         db.advance(10)
         repo.deleteItem(repo.addItem(l2.id, "乙").id)
 
         val reopened = db.reopenedRepository()
 
         assertEquals(repo.lists.value, reopened.lists.value, "清单应从库中完整读回")
-        assertEquals(repo.items.value, reopened.items.value, "待办（含墓碑、描述与进度）应从库中完整读回")
+        assertEquals(repo.items.value, reopened.items.value, "待办（含墓碑、描述、进度时间线与整体进度）应从库中完整读回")
     }
 
     // ---------- 变更回调 ----------
